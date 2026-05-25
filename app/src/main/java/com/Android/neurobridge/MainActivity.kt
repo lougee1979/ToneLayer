@@ -1,4 +1,5 @@
 package com.Android.neurobridge
+
 import android.os.Bundle
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
@@ -16,12 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-/**
- * The main activity for the NeuroBridge application.
- *
- * This activity hosts the primary user interface for analyzing and rewriting text
- * from various neurodivergent perspectives.
- */
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,28 +26,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-/**
- * Represents different neurodivergent "lenses" through which text can be analyzed.
- */
+
 enum class ClarityLens {
-    /** Analysis tailored for ADHD individuals. */
     ADHD,
-    /** Analysis tailored for Autistic individuals. */
     AUTISM,
-    /** Analysis tailored for individuals with PTSD. */
     PTSD,
-    /** A combination of analysis for multiple neurodivergent traits. */
     MIXED,
-    /** Automatic detection and analysis based on common ND communication patterns. */
     AUTO
 }
 
-/**
- * The main UI component of the NeuroBridge application.
- *
- * Provides fields for inputting text, selecting a clarity lens, and viewing the
- * generated ND-focused analysis and recommendations.
- */
+enum class RewriteStyle(val buttonLabel: String, val resultTitle: String) {
+    CLEAR("Rewrite", "Clearer rewrite"),
+    SHORTER("Shorter", "Shorter rewrite"),
+    WARMER("Warmer", "Warmer rewrite"),
+    DIRECT("Direct", "More direct rewrite"),
+    SOFTER("Soften", "Softer rewrite")
+}
+
 @Composable
 fun NeuroBridgeApp() {
     val context = LocalContext.current
@@ -61,10 +52,12 @@ fun NeuroBridgeApp() {
             "Hey so I've been thinking about what you said the other night and I think we should probably talk at some point."
         )
     }
-    var selectedLens by remember {
-        mutableStateOf(ClarityLens.AUTO)
-    }
+    var selectedLens by remember { mutableStateOf(ClarityLens.AUTO) }
+    var rewriteTitle by remember { mutableStateOf("Clearer rewrite") }
+    var rewriteText by remember { mutableStateOf(createRewriteResult(inputText, selectedLens, RewriteStyle.CLEAR)) }
+
     val output = createClarityResult(inputText, selectedLens)
+
     MaterialTheme {
         Column(
             modifier = Modifier
@@ -78,47 +71,75 @@ fun NeuroBridgeApp() {
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold
             )
+
             Spacer(modifier = Modifier.height(12.dp))
+
             Button(
-                onClick = {
-                    imm?.showInputMethodPicker()
-                },
+                onClick = { imm?.showInputMethodPicker() },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Open Keyboard Picker")
             }
+
             Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Lens Mode",
-                fontWeight = FontWeight.Bold
-            )
+
+            Text(text = "Lens Mode", fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
             LensSelector(
                 selectedLens = selectedLens,
                 onLensSelected = {
                     selectedLens = it
+                    rewriteText = createRewriteResult(inputText, it, RewriteStyle.CLEAR)
+                    rewriteTitle = RewriteStyle.CLEAR.resultTitle
                 }
             )
+
             Spacer(modifier = Modifier.height(20.dp))
+
             OutlinedTextField(
                 value = inputText,
                 onValueChange = {
                     inputText = it
+                    rewriteText = createRewriteResult(it, selectedLens, RewriteStyle.CLEAR)
+                    rewriteTitle = RewriteStyle.CLEAR.resultTitle
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(180.dp),
-                label = {
-                    Text("NT message")
+                label = { Text("NT message") }
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            RewriteTools(
+                onRewriteSelected = { style ->
+                    rewriteTitle = style.resultTitle
+                    rewriteText = createRewriteResult(inputText, selectedLens, style)
                 }
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = rewriteTitle,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 22.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = rewriteText,
+                        fontSize = 17.sp,
+                        lineHeight = 26.sp
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = "Teaching Explanation",
                         fontWeight = FontWeight.Bold,
@@ -132,16 +153,56 @@ fun NeuroBridgeApp() {
                     )
                 }
             }
+
             Spacer(modifier = Modifier.height(60.dp))
         }
     }
 }
-/**
- * A UI component for selecting the active [ClarityLens].
- *
- * @param selectedLens The currently selected lens.
- * @param onLensSelected Callback triggered when a new lens is selected.
- */
+
+@Composable
+fun RewriteTools(onRewriteSelected: (RewriteStyle) -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Rewrite Tools",
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = { onRewriteSelected(RewriteStyle.CLEAR) },
+                    modifier = Modifier.weight(1f)
+                ) { Text(RewriteStyle.CLEAR.buttonLabel) }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = { onRewriteSelected(RewriteStyle.SHORTER) },
+                    modifier = Modifier.weight(1f)
+                ) { Text(RewriteStyle.SHORTER.buttonLabel) }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = { onRewriteSelected(RewriteStyle.WARMER) },
+                    modifier = Modifier.weight(1f)
+                ) { Text(RewriteStyle.WARMER.buttonLabel) }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = { onRewriteSelected(RewriteStyle.DIRECT) },
+                    modifier = Modifier.weight(1f)
+                ) { Text(RewriteStyle.DIRECT.buttonLabel) }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { onRewriteSelected(RewriteStyle.SOFER_SAFE()) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(RewriteStyle.SOFTER.buttonLabel) }
+        }
+    }
+}
+
+private fun RewriteStyle.Companion.SOFER_SAFE(): RewriteStyle = RewriteStyle.SOFTER
+
 @Composable
 fun LensSelector(
     selectedLens: ClarityLens,
@@ -149,123 +210,116 @@ fun LensSelector(
 ) {
     Column {
         ClarityLens.entries.forEach { lens ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(
                     selected = selectedLens == lens,
-                    onClick = {
-                        onLensSelected(lens)
-                    }
+                    onClick = { onLensSelected(lens) }
                 )
-                Text(
-                    text = lens.name
-                )
+                Text(text = lens.name)
             }
         }
     }
 }
-/**
- * Generates a clarity analysis and recommendations based on the input text and selected lens.
- *
- * @param input The text to be analyzed.
- * @param lens The neurodivergent perspective to use for the analysis.
- * @return A string containing the analysis, potential issues, and recommended improvements.
- */
-fun createClarityResult(
-    input: String,
-    lens: ClarityLens
-): String {
+
+fun createRewriteResult(input: String, lens: ClarityLens, style: RewriteStyle): String {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty()) {
+        return "Enter a message above, then tap Rewrite."
+    }
+
+    val clarityFrame = when (lens) {
+        ClarityLens.ADHD -> "with clear next steps, lower cognitive load, and less ambiguity"
+        ClarityLens.AUTISM -> "with explicit context, concrete expectations, and reduced implied meaning"
+        ClarityLens.PTSD -> "with emotional safety, low threat, and clear reassurance"
+        ClarityLens.MIXED -> "with clear timing, intent, emotional framing, and action steps"
+        ClarityLens.AUTO -> "with clearer intent, timing, tone, and requested action"
+    }
+
+    return when (style) {
+        RewriteStyle.CLEAR -> "I want to revisit this in a clearer way. My goal is to communicate $clarityFrame. Here is the message I mean to send: $trimmed"
+        RewriteStyle.SHORTER -> "Clear version: $trimmed"
+        RewriteStyle.WARMER -> "I wanted to say this in a warmer way: $trimmed. My intent is connection and clarity, not pressure."
+        RewriteStyle.DIRECT -> "Direct version: $trimmed. Please let me know what works for you."
+        RewriteStyle.SOFTER -> "Softer version: $trimmed. No pressure to respond immediately — I just wanted to make my intent clear."
+    }
+}
+
+fun createClarityResult(input: String, lens: ClarityLens): String {
+    val message = input.trim().ifEmpty { "the message" }
     return when (lens) {
         ClarityLens.ADHD -> """
 ADHD Lens Analysis
-This message may create cognitive overload because it lacks concrete structure and forces the receiver to hold multiple unresolved possibilities at once.
-The phrase "we should talk sometime" creates uncertainty around:
-- urgency
-- emotional tone
-- expected response
-- timeline
-- emotional risk
-An ADHD receiver may begin mentally simulating:
-- whether they are in trouble
-- whether conflict is coming
-- whether immediate action is needed
-- whether they forgot something important
-This creates executive function drag because the brain must fill in missing context before acting.
-Clearer version:
-"I want to talk about what happened the other night. Nothing catastrophic — I just want clarification. Could we talk Tuesday at 2pm or Wednesday at 10am?"
+This message may create cognitive overload if it lacks concrete structure.
+
+Possible friction points:
+- unclear urgency
+- unclear next step
+- unclear timeline
+- too much implied context
+
+For ADHD-friendly clarity, state the topic, urgency, and requested action directly.
+
+Current message being analyzed:
+"$message"
 """.trimIndent()
         ClarityLens.AUTISM -> """
 Autism Lens Analysis
-This message depends heavily on implied emotional context rather than explicit communication.
-The receiver may struggle to determine:
-- the actual topic
-- whether the situation is serious
-- what action is expected
-- whether reassurance is needed
-- whether this is casual or emotionally loaded
-Autistic processing often prefers direct structure and reduced ambiguity.
-The sentence "we should probably talk at some point" contains:
-- unclear timing
+This message may rely on implied emotional context.
+
+Possible friction points:
 - unclear purpose
-- unclear emotional framing
-Clearer version:
-"I want to discuss what you said the other night. I am not angry, but I want clarification. Are you available Tuesday at 2pm?"
+- unclear seriousness
+- unclear expected response
+- indirect timing
+
+For autistic-friendly clarity, make the topic, intent, and expectation explicit.
+
+Current message being analyzed:
+"$message"
 """.trimIndent()
         ClarityLens.PTSD -> """
 PTSD Lens Analysis
-This wording may unintentionally trigger anticipatory stress because it implies unresolved emotional tension without defining safety or outcome.
-Phrases like:
-- "I've been thinking"
-- "we should talk"
-- "at some point"
-can create hypervigilance because the receiver does not know:
-- if conflict is coming
-- if rejection is coming
-- whether danger exists
-- whether immediate response is required
-The uncertainty itself may become emotionally activating.
-Safer version:
-"I want to revisit part of our earlier conversation. You are not in trouble and this is not an emergency. I just want clarification and connection."
+This message may create anticipatory stress if emotional safety is unclear.
+
+Possible friction points:
+- undefined conflict level
+- unclear urgency
+- unclear whether the receiver is in trouble
+- open-ended tension
+
+For trauma-aware clarity, include reassurance, safety, and timing.
+
+Current message being analyzed:
+"$message"
 """.trimIndent()
         ClarityLens.MIXED -> """
 Mixed Neurodivergent Lens Analysis
-This message creates multiple layers of ambiguity simultaneously:
+This message may create several kinds of ambiguity at once.
+
+Possible friction points:
 - emotional ambiguity
 - timeline ambiguity
 - expectation ambiguity
 - urgency ambiguity
-Different ND profiles may experience:
-- executive paralysis
-- over-analysis
-- anticipatory anxiety
-- rejection sensitivity
-- shutdown or delayed response
-The sender likely intends softness or reduced pressure, but the lack of specificity increases cognitive load instead.
-Clearer version:
-"I want to talk about our conversation from the other night. This is not an emergency. I mainly want clarification and connection. Could we talk Tuesday at 2pm or Wednesday at 10am?"
+
+For mixed ND clarity, state what this is about, how urgent it is, and what response is needed.
+
+Current message being analyzed:
+"$message"
 """.trimIndent()
         ClarityLens.AUTO -> """
 Automatic Clarity Analysis
-This message contains high ambiguity and low structural clarity.
-Potential issues:
-- unclear urgency
-- undefined topic
-- implied emotional tension
-- no action pathway
-- no timeline
-Many ND readers may interpret this as emotionally unresolved or cognitively incomplete.
-Why this happens:
-NT communication often assumes shared emotional inference. ND processing frequently relies more heavily on explicit structure, timing, intent, and categorization.
+This message is checked for ambiguity, emotional uncertainty, missing context, and unclear action steps.
+
 Recommended improvement:
-State:
-- the topic
-- urgency level
-- emotional intent
-- requested action
-- preferred timeline
-Example rewrite:
-"I want to talk about our earlier conversation. Nothing catastrophic — I just want clarification. Could we talk Tuesday at 2pm or Wednesday at 10am?"
+- state the topic
+- state urgency level
+- state emotional intent
+- give a clear next step
+- offer a concrete timeline if needed
+
+Current message being analyzed:
+"$message"
 """.trimIndent()
     }
 }
