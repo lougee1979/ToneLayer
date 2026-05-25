@@ -1,9 +1,6 @@
 package com.Android.neurobridge
 
-import android.content.Intent
 import android.os.Bundle
-import android.provider.Settings
-import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -15,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,8 +43,6 @@ enum class RewriteStyle(val buttonLabel: String, val resultTitle: String) {
 
 @Composable
 fun NeuroBridgeApp() {
-    val context = LocalContext.current
-    val imm = context.getSystemService(InputMethodManager::class.java)
     var inputText by remember {
         mutableStateOf(
             "Hey so I've been thinking about what you said the other night and I think we should probably talk at some point."
@@ -73,26 +67,6 @@ fun NeuroBridgeApp() {
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold
             )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = {
-                    context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Enable NeuroBridge Clarity Keyboard")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                onClick = { imm?.showInputMethodPicker() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Switch Keyboard")
-            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
