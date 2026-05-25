@@ -1,6 +1,8 @@
 package com.Android.neurobridge
 
+import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -75,10 +77,21 @@ fun NeuroBridgeApp() {
             Spacer(modifier = Modifier.height(12.dp))
 
             Button(
+                onClick = {
+                    context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Enable NeuroBridge Clarity Keyboard")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
                 onClick = { imm?.showInputMethodPicker() },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Open Keyboard Picker")
+                Text("Switch Keyboard")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
