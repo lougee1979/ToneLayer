@@ -194,14 +194,12 @@ fun RewriteTools(onRewriteSelected: (RewriteStyle) -> Unit) {
             }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedButton(
-                onClick = { onRewriteSelected(RewriteStyle.SOFER_SAFE()) },
+                onClick = { onRewriteSelected(RewriteStyle.SOFTER) },
                 modifier = Modifier.fillMaxWidth()
             ) { Text(RewriteStyle.SOFTER.buttonLabel) }
         }
     }
 }
-
-private fun RewriteStyle.Companion.SOFER_SAFE(): RewriteStyle = RewriteStyle.SOFTER
 
 @Composable
 fun LensSelector(
