@@ -31,7 +31,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
         analysisRow.addView(keyButton("Analyze") {
             commitText("[Analyze this message for possible neurodivergent communication friction]")
         })
-        analysisRow.addView(keyButton("Clarify") {
+        analysisRow.addView(keyButton("Rewrite") {
             commitText("[Rewrite this for clearer neurodivergent-friendly communication]")
         })
 
