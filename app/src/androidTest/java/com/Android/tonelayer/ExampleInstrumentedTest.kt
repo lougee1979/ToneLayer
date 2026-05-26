@@ -2,7 +2,7 @@
 // Proprietary and confidential. Unauthorized copying, modification,
 // distribution, or derivative use is prohibited.
 
-package com.Android.neurobridge
+package com.Android.tonelayer
 
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -23,6 +23,6 @@ class ExampleInstrumentedTest {
     fun useAppContext() {
         // Context of the app under test.
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("com.Android.neurobridge", appContext.packageName)
+        assertEquals("com.android.tonelayer", appContext.packageName)
     }
 }

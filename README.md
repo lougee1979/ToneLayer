@@ -1,4 +1,4 @@
-# ToneLayer Clarity Android
+# ToneLayer Android
 
 Proprietary software. Copyright (c) 2026 Alden Lougee. All rights reserved.
 

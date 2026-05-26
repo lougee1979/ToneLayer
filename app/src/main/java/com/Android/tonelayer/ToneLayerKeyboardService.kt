@@ -2,7 +2,7 @@
 // Proprietary and confidential. Unauthorized copying, modification,
 // distribution, or derivative use is prohibited.
 
-package com.Android.neurobridge
+package com.Android.tonelayer
 
 import android.graphics.Color
 import android.graphics.Typeface
@@ -151,13 +151,14 @@ class ToneLayerKeyboardService : InputMethodService() {
         val apiKey = prefs.getString(PREF_CLAUDE_API_KEY, "").orEmpty().trim()
         val consent = prefs.getBoolean(PREF_AI_CONSENT, false)
         if (!consent) {
-            latestRewrite = createRewriteResult(source, ClarityLens.AUTO, mode.toRewriteStyle())
+            latestRewrite = createRewriteResult(source, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
             latestTeaching = appendLongMessageCheck(
                 fallbackTeaching(
                     source,
-                    ClarityLens.AUTO,
+                    NeuroProfile.AUTO,
                     mode.toRewriteStyle(),
-                    "Turn on AI processing consent in the ToneLayer Clarity app to use live rewrites."
+                    RewriteDirection.ND_TO_NT,
+                    "Turn on AI processing consent in the ToneLayer app to use live rewrites."
                 ),
                 source
             )
@@ -165,13 +166,14 @@ class ToneLayerKeyboardService : InputMethodService() {
             return
         }
         if (apiKey.isBlank()) {
-            latestRewrite = createRewriteResult(source, ClarityLens.AUTO, mode.toRewriteStyle())
+            latestRewrite = createRewriteResult(source, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
             latestTeaching = appendLongMessageCheck(
                 fallbackTeaching(
                     source,
-                    ClarityLens.AUTO,
+                    NeuroProfile.AUTO,
                     mode.toRewriteStyle(),
-                    "Add your Claude API key in the ToneLayer Clarity app to use live rewrites."
+                    RewriteDirection.ND_TO_NT,
+                    "Add your Claude API key in the ToneLayer app to use live rewrites."
                 ),
                 source
             )
@@ -186,12 +188,13 @@ class ToneLayerKeyboardService : InputMethodService() {
                     latestRewrite = it.first
                     latestTeaching = appendLongMessageCheck(it.second, source)
                 }.onFailure {
-                    latestRewrite = createRewriteResult(source, ClarityLens.AUTO, mode.toRewriteStyle())
+                    latestRewrite = createRewriteResult(source, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
                     latestTeaching = appendLongMessageCheck(
                         fallbackTeaching(
                             source,
-                            ClarityLens.AUTO,
+                            NeuroProfile.AUTO,
                             mode.toRewriteStyle(),
+                            RewriteDirection.ND_TO_NT,
                             friendlyClaudeFailure(it)
                         ),
                         source
@@ -226,11 +229,11 @@ class ToneLayerKeyboardService : InputMethodService() {
     }
 
     private fun createRewrite(text: String, mode: RewriteMode): String {
-        return createRewriteResult(text, ClarityLens.AUTO, mode.toRewriteStyle())
+        return createRewriteResult(text, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
     }
 
     private fun createTeaching(text: String, mode: RewriteMode): String {
-        return fallbackTeaching(text, ClarityLens.AUTO, mode.toRewriteStyle())
+        return fallbackTeaching(text, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
     }
 
     private fun longMessageCheck(text: String): String {
@@ -248,7 +251,7 @@ class ToneLayerKeyboardService : InputMethodService() {
             RewriteMode.DIRECT -> "Make the message direct and clear without sounding harsh."
         }
         val system = """
-            You are ToneLayer Clarity, a communication assistant. Rewrite the user's message so it is clearer, easier to receive, and matched to the requested style. Do not shame the user. Preserve meaning. Return ONLY valid JSON with keys rewrite and teaching. Teaching should explain briefly why the change improves clarity.
+            You are ToneLayer, a communication assistant. The sender is neurodivergent and wants the message to land clearly with a neurotypical reader. Rewrite the user's message so it is clearer, easier to receive, and matched to the requested style. Do not shame the user. Preserve meaning. Return ONLY valid JSON with keys rewrite and teaching. Teaching should explain briefly what was translated for NT readability.
             Style: $style
         """.trimIndent()
 

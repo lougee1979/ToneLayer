@@ -2,7 +2,7 @@
 // Proprietary and confidential. Unauthorized copying, modification,
 // distribution, or derivative use is prohibited.
 
-package com.Android.neurobridge.ui.theme
+package com.Android.tonelayer.ui.theme
 
 import android.app.Activity
 import android.os.Build
