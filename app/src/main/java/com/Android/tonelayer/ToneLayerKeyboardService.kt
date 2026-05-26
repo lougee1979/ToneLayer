@@ -26,6 +26,11 @@ import java.net.URL
 private const val PREFS_NAME = "tonelayer_clarity_prefs"
 private const val PREF_CLAUDE_API_KEY = "claude_api_key"
 private const val PREF_AI_CONSENT = "ai_processing_consent"
+private const val PREF_SHOW_TEACHING = "show_teaching_boxes"
+private val toneLayerPurple = Color.rgb(109, 74, 200)
+private val toneLayerGreen = Color.rgb(5, 150, 105)
+private val toneLayerPurpleSoft = Color.rgb(244, 240, 255)
+private val toneLayerGreenSoft = Color.rgb(236, 253, 245)
 
 class ToneLayerKeyboardService : InputMethodService() {
     private var isShifted = false
@@ -50,7 +55,7 @@ class ToneLayerKeyboardService : InputMethodService() {
 
     private fun buildKeyboard() {
         root.removeAllViews()
-        addClarityToolbar()
+        addToneLayerToolbar()
         addRewritePanel()
         addLetterRow("qwertyuiop", sideInsetWeight = 0f)
         addLetterRow("asdfghjkl", sideInsetWeight = 0.45f)
@@ -58,7 +63,7 @@ class ToneLayerKeyboardService : InputMethodService() {
         addUtilityRow()
     }
 
-    private fun addClarityToolbar() {
+    private fun addToneLayerToolbar() {
         val row = horizontalRow(heightDp = 36)
         row.addView(toolbarKey("Clarify", weight = 1.2f) { runRewrite(RewriteMode.CLEAR) })
         row.addView(toolbarKey("Shorter") { runRewrite(RewriteMode.SHORTER) })
@@ -70,7 +75,7 @@ class ToneLayerKeyboardService : InputMethodService() {
     private fun addRewritePanel() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedBackground(Color.rgb(232, 226, 236), 12f)
+            background = gradientBackground(toneLayerPurpleSoft, toneLayerGreenSoft, 12f)
             setPadding(dp(8), dp(6), dp(8), dp(6))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -91,19 +96,21 @@ class ToneLayerKeyboardService : InputMethodService() {
             maxLines = 2
         })
 
-        panel.addView(TextView(this).apply {
-            text = "Teaching box"
-            setTextColor(Color.rgb(28, 28, 30))
-            setTextSize(13f)
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(4), 0, 0)
-        })
-        panel.addView(TextView(this).apply {
-            text = latestTeaching
-            setTextColor(Color.rgb(60, 60, 67))
-            setTextSize(13f)
-            maxLines = 2
-        })
+        if (showTeachingBoxesEnabled()) {
+            panel.addView(TextView(this).apply {
+                text = "Teaching box"
+                setTextColor(Color.rgb(28, 28, 30))
+                setTextSize(13f)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(4), 0, 0)
+            })
+            panel.addView(TextView(this).apply {
+                text = latestTeaching
+                setTextColor(Color.rgb(60, 60, 67))
+                setTextSize(13f)
+                maxLines = 2
+            })
+        }
 
         val useRow = horizontalRow(heightDp = 34)
         useRow.addView(toolbarKey("Use Rewrite", weight = 1.4f) { useLatestRewrite() })
@@ -376,7 +383,9 @@ class ToneLayerKeyboardService : InputMethodService() {
     }
 
     private fun toolbarKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
-        return keyView(label, weight, Color.rgb(245, 245, 247), Color.rgb(54, 54, 57), 13f, 16f, onClick)
+        return keyView(label, weight, toneLayerPurple, Color.WHITE, 13f, 16f, onClick).apply {
+            background = gradientBackground(toneLayerPurple, toneLayerGreen, 16f)
+        }
     }
 
     private fun keyView(
@@ -412,6 +421,16 @@ class ToneLayerKeyboardService : InputMethodService() {
         }
     }
 
+    private fun gradientBackground(startColor: Int, endColor: Int, radiusDp: Float): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(startColor, endColor)
+        ).apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = radiusDp * resources.displayMetrics.density
+        }
+    }
+
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
     }
@@ -424,6 +443,10 @@ class ToneLayerKeyboardService : InputMethodService() {
     private fun appendLongMessageCheck(teaching: String, source: String): String {
         val lengthNote = longMessageCheck(source)
         return if (lengthNote.isBlank()) teaching else "$teaching $lengthNote"
+    }
+
+    private fun showTeachingBoxesEnabled(): Boolean {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_SHOW_TEACHING, true)
     }
 
     private enum class RewriteMode {
