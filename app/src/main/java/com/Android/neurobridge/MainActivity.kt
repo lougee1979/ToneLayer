@@ -418,7 +418,7 @@ fun callClaudeForApp(
         ClarityLens.ADHD -> "ADHD: reduce working-memory load, surface the main point first, use clear next steps, remove side quests and buried asks."
         ClarityLens.AUTISM -> "Autism: make implied meaning explicit, use concrete expectations, add social context without changing the user’s meaning."
         ClarityLens.PTSD -> "PTSD/CPTSD: lower threat signals, preserve boundaries, reduce defensiveness, add calm reassurance where appropriate."
-        ClarityLens.MIXED -> "Mixed: clarify timing, intent, emotional framing, and requested action."
+        ClarityLens.MIXED -> "Mixed: rewrite for overlapping ADHD, autistic, PTSD/CPTSD, and anxiety-related communication needs. Make the main point obvious first. Reduce working-memory load. Make implied meaning explicit. Remove vague timing or social hints. Lower threat signals and defensive wording. Include reassurance when appropriate. End with one clear next step."
         ClarityLens.AUTO -> "Auto: identify ambiguity, missing context, unclear urgency, tone mismatch, and unclear next steps."
     }
     val styleInstruction = when (style) {
@@ -493,7 +493,7 @@ fun createRewriteResult(input: String, lens: ClarityLens, style: RewriteStyle): 
         ClarityLens.ADHD -> "clear next steps, lower cognitive load, and less ambiguity"
         ClarityLens.AUTISM -> "explicit context, concrete expectations, and reduced implied meaning"
         ClarityLens.PTSD -> "emotional safety, low threat, and clear reassurance"
-        ClarityLens.MIXED -> "clear timing, intent, emotional framing, and action steps"
+        ClarityLens.MIXED -> "main point first, explicit meaning, low ambiguity, low threat, clear timing, and one obvious next step"
         ClarityLens.AUTO -> "clearer intent, timing, tone, and requested action"
     }
     val brief = trimmed.split(Regex("\\s+")).take(28).joinToString(" ")
@@ -593,7 +593,7 @@ Possible friction points:
 - expectation ambiguity
 - urgency ambiguity
 
-For mixed ND clarity, state what this is about, how urgent it is, and what response is needed.
+For mixed clarity, assume overlapping ADHD, autistic, PTSD/CPTSD, and anxiety-related needs. Put the main point first, reduce working-memory load, make implied meaning explicit, lower threat signals, define timing, and give one clear next step.
 
 Current message being analyzed:
 "$message"
