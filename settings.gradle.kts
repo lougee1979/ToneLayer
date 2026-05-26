@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "NeuroBridge"
+rootProject.name = "ToneLayer"
 include(":app")
  

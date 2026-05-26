@@ -1,5 +1,5 @@
 /**
- * Build configuration for the NeuroBridge Android application module.
+ * Build configuration for the ToneLayer Android application module.
  */
 plugins {
     alias(libs.plugins.android.application)

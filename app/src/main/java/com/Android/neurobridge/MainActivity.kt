@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            NeuroBridgeApp()
+            ToneLayerClarityApp()
         }
     }
 }
@@ -52,7 +52,7 @@ enum class RewriteStyle(val buttonLabel: String, val resultTitle: String) {
 }
 
 @Composable
-fun NeuroBridgeApp() {
+fun ToneLayerClarityApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE) }
     var apiKey by remember { mutableStateOf(prefs.getString(PREF_CLAUDE_API_KEY, "") ?: "") }

@@ -27,7 +27,7 @@ private const val PREFS_NAME = "tonelayer_clarity_prefs"
 private const val PREF_CLAUDE_API_KEY = "claude_api_key"
 private const val PREF_AI_CONSENT = "ai_processing_consent"
 
-class NeuroBridgeKeyboardService : InputMethodService() {
+class ToneLayerKeyboardService : InputMethodService() {
     private var isShifted = false
     private var latestOriginal = ""
     private var latestRewrite = ""

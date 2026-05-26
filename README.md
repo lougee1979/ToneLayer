@@ -1,4 +1,4 @@
-# NeuroBridge Clarity Android
+# ToneLayer Clarity Android
 
 Proprietary software. Copyright (c) 2026 Alden Lougee. All rights reserved.
 
