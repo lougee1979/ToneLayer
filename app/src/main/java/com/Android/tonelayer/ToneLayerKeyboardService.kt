@@ -84,7 +84,7 @@ class ToneLayerKeyboardService : InputMethodService() {
         }
 
         panel.addView(TextView(this).apply {
-            text = "Rewrite box"
+            text = getString(R.string.rewrite_box_label)
             setTextColor(Color.rgb(28, 28, 30))
             setTextSize(13f)
             typeface = Typeface.DEFAULT_BOLD
@@ -98,7 +98,7 @@ class ToneLayerKeyboardService : InputMethodService() {
 
         if (showTeachingBoxesEnabled()) {
             panel.addView(TextView(this).apply {
-                text = "Teaching box"
+                text = getString(R.string.teaching_box_label)
                 setTextColor(Color.rgb(28, 28, 30))
                 setTextSize(13f)
                 typeface = Typeface.DEFAULT_BOLD

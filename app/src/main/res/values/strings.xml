@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">ToneLayer</string>
+    <string name="rewrite_box_label">Rewrite box</string>
+    <string name="teaching_box_label">Teaching box</string>
 </resources>

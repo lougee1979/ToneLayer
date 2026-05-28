@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -197,20 +198,20 @@ fun ToneLayerApp() {
                         senderLens = toneLayerProfile,
                         onApiKeyChange = {
                             apiKey = it
-                            prefs.edit().putString(PREF_CLAUDE_API_KEY, it.trim()).apply()
+                            prefs.edit { putString(PREF_CLAUDE_API_KEY, it.trim()) }
                         },
                         onConsentChange = {
                             aiConsent = it
-                            prefs.edit().putBoolean(PREF_AI_CONSENT, it).apply()
+                            prefs.edit { putBoolean(PREF_AI_CONSENT, it) }
                         },
                         onTeachingBoxesChange = {
                             showTeachingBoxes = it
-                            prefs.edit().putBoolean(PREF_SHOW_TEACHING, it).apply()
+                            prefs.edit { putBoolean(PREF_SHOW_TEACHING, it) }
                         },
                         onSenderLensSelected = {
                             toneLayerProfile = it
                             toneLayerTeachingText = createToneLayerAnalysis(toneLayerInput, it)
-                            prefs.edit().putString(PREF_SENDER_LENS, it.name).apply()
+                            prefs.edit { putString(PREF_SENDER_LENS, it.name) }
                         },
                         onOpenKeyboardSettings = {
                             openKeyboardSettings(context)
@@ -713,10 +714,10 @@ fun requestRewrite(
 
 fun incrementMetric(prefs: android.content.SharedPreferences, key: String, amount: Int = 1) {
     val fullKey = "metrics.$key"
-    prefs.edit()
-        .putInt(fullKey, prefs.getInt(fullKey, 0) + amount)
-        .putLong("metrics.lastUpdated", System.currentTimeMillis())
-        .apply()
+    prefs.edit {
+        putInt(fullKey, prefs.getInt(fullKey, 0) + amount)
+        putLong("metrics.lastUpdated", System.currentTimeMillis())
+    }
 }
 
 fun copyToClipboard(context: android.content.Context, text: String) {
