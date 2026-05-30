@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -69,11 +70,24 @@ enum class NeuroProfile(val displayName: String, val description: String) {
     MIXED(   "Mixed / Not Sure","Broad ND-to-NT lens, no diagnosis required")
 }
 
-enum class ToneLayerSection(val label: String) { TONELAYER("ToneLayer"), SETTINGS("Settings") }
+enum class ToneLayerSection(val label: String) {
+    TONELAYER("ToneLayer"),
+    NARCSCREEN("🛡 Screen"),
+    SETTINGS("Settings")
+}
+
+val NarcAmber = FeatureColors(
+    primary   = Color(0xFFAD5200),
+    secondary = Color(0xFF059669),
+    surface   = Color(0xFFFFF8EC),
+    soft      = Color(0xFFFFF3D6),
+    outline   = Color(0xFFFFCC80)
+)
 
 fun ToneLayerSection.featureColors(): FeatureColors = when (this) {
-    ToneLayerSection.TONELAYER -> ToneLayerBlue
-    ToneLayerSection.SETTINGS  -> NeutralGray
+    ToneLayerSection.TONELAYER   -> ToneLayerBlue
+    ToneLayerSection.NARCSCREEN  -> NarcAmber
+    ToneLayerSection.SETTINGS    -> NeutralGray
 }
 
 // ─── Result model ─────────────────────────────────────────────────────────────
@@ -300,6 +314,11 @@ fun ToneLayerApp() {
 
                     // Log card
                     LogCard(entries = logEntries, featureColors = ToneLayerBlue)
+                    Spacer(Modifier.height(60.dp))
+                }
+
+                ToneLayerSection.NARCSCREEN -> {
+                    NarcScreen(apiKey = apiKey, aiConsent = aiConsent, prefs = prefs, scope = scope)
                     Spacer(Modifier.height(60.dp))
                 }
 
@@ -931,6 +950,309 @@ fun friendlyClaudeFailure(error: Throwable): String {
             "Claude is having a server issue right now. Showing original text for now."
         else -> "Live rewrite is unavailable right now. Showing original text for now."
     }
+}
+
+// ─── Narcissist Screen ────────────────────────────────────────────────────────
+
+data class NarcPattern(
+    val name: String,
+    val quote: String,
+    val explanation: String,
+    val ndImpact: String
+)
+
+data class NarcResult(
+    val riskLevel: String,
+    val patterns: List<NarcPattern>,
+    val summary: String,
+    val validation: String,
+    val boundaryScript: String
+)
+
+@Composable
+fun NarcScreen(
+    apiKey: String,
+    aiConsent: Boolean,
+    prefs: android.content.SharedPreferences,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
+    val context = LocalContext.current
+    var narcInput        by remember { mutableStateOf("") }
+    var isScanning       by remember { mutableStateOf(false) }
+    var result           by remember { mutableStateOf<NarcResult?>(null) }
+    var narcStatus       by remember { mutableStateOf("") }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+
+        // Intro card
+        Card(modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8EC))) {
+            Column(Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.Top) {
+                    Text("🛡", fontSize = 28.sp, modifier = Modifier.padding(end = 10.dp, top = 2.dp))
+                    Column {
+                        Text("Narcissist Screen", fontWeight = FontWeight.Bold, fontSize = 20.sp,
+                            color = Color(0xFFAD5200))
+                        Text("Paste a message you received. We'll tell you what it's actually doing.",
+                            fontSize = 14.sp, color = Color.Gray, lineHeight = 20.sp)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Neurodivergent people are disproportionately targeted by manipulation because they tend to trust literally, take blame easily, and second-guess their own perceptions. This screen is on your side.",
+                    fontSize = 12.sp, lineHeight = 17.sp,
+                    color = Color(0xFF6B4400),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFFFF3D6),
+                            RoundedCornerShape(8.dp))
+                        .padding(10.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Input card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Paste the message you received", fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                    color = Color(0xFFAD5200))
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = narcInput,
+                    onValueChange = { narcInput = it },
+                    modifier = Modifier.fillMaxWidth().height(160.dp),
+                    placeholder = { Text("Paste the message here…", color = Color.Gray) }
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = {
+                            val cb = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                as android.content.ClipboardManager
+                            cb.primaryClip?.getItemAt(0)?.text?.toString()?.let { narcInput = it }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Paste") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { narcInput = ""; result = null; narcStatus = "" },
+                        modifier = Modifier.weight(1f),
+                        enabled = narcInput.isNotBlank()
+                    ) { Text("Clear") }
+                }
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = {
+                        val input = narcInput.trim()
+                        if (input.isBlank()) { narcStatus = "Paste a message first"; return@Button }
+                        if (apiKey.isBlank()) { narcStatus = "Add your Claude API key in Settings first"; return@Button }
+                        isScanning = true
+                        narcStatus = "Scanning ${input.length} characters…"
+                        result = null
+                        scope.launch {
+                            val r = withContext(Dispatchers.IO) {
+                                runCatching { callClaudeForNarc(apiKey.trim(), input) }.getOrElse {
+                                    NarcResult("none", emptyList(), "", friendlyClaudeFailure(it), "")
+                                }
+                            }
+                            isScanning = false
+                            narcStatus = ""
+                            result = r
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isScanning && narcInput.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFAD5200))
+                ) {
+                    if (isScanning) {
+                        CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (isScanning) "Scanning…" else "🛡  Scan This Message", fontWeight = FontWeight.Bold)
+                }
+                if (narcStatus.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(narcStatus, fontSize = 12.sp, color = Color.Gray)
+                }
+            }
+        }
+
+        // Results
+        result?.let { r ->
+            Spacer(Modifier.height(16.dp))
+
+            // Risk banner
+            val (riskColor, riskLabel) = when (r.riskLevel) {
+                "high"     -> Pair(Color(0xFFCC1A1A), "Multiple manipulation tactics — you are not imagining this")
+                "moderate" -> Pair(Color(0xFFD97706), "Several patterns detected — trust your instincts")
+                "low"      -> Pair(Color(0xFFB45309), "Minor concerns worth noting")
+                else       -> Pair(Color(0xFF059669), "No concerning patterns detected")
+            }
+            val riskEmoji = when (r.riskLevel) { "high" -> "🔴"; "moderate" -> "🟠"; "low" -> "🟡"; else -> "✅" }
+
+            Card(modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = riskColor.copy(alpha = 0.10f))) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(riskEmoji, fontSize = 24.sp, modifier = Modifier.padding(end = 10.dp))
+                    Text(riskLabel, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = riskColor)
+                }
+            }
+
+            // Validation
+            if (r.validation.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Card(modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE6F9F0))) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("✓  You are not imagining it", fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp, color = Color(0xFF1A7A4A))
+                        Spacer(Modifier.height(4.dp))
+                        Text(r.validation, fontSize = 14.sp, lineHeight = 20.sp)
+                    }
+                }
+            }
+
+            // Summary
+            if (r.summary.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("What this message is doing", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Text(r.summary, fontSize = 14.sp, lineHeight = 20.sp)
+                    }
+                }
+            }
+
+            // Patterns
+            if (r.patterns.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Card(modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8EC))) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("Patterns detected", fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                            color = Color(0xFFAD5200))
+                        Spacer(Modifier.height(10.dp))
+                        r.patterns.forEach { p ->
+                            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(p.name, fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                                        color = Color(0xFFD97706))
+                                    if (p.quote.isNotBlank()) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text("“${p.quote}”",
+                                            fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                            color = Color(0xFF7A3A00),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(Color(0xFFFFF3D6), RoundedCornerShape(6.dp))
+                                                .padding(8.dp))
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(p.explanation, fontSize = 13.sp, lineHeight = 18.sp)
+                                    if (p.ndImpact.isNotBlank()) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Row {
+                                            Text("🧠 ", fontSize = 12.sp)
+                                            Text(p.ndImpact, fontSize = 12.sp, lineHeight = 17.sp,
+                                                color = Color(0xFF5B3DAA))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Boundary script
+            if (r.boundaryScript.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Card(modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8EEFF))) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("You could say — or say nothing at all",
+                            fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1D4ED8))
+                        Spacer(Modifier.height(6.dp))
+                        SelectionContainer {
+                            Text(r.boundaryScript, fontSize = 14.sp, lineHeight = 20.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun callClaudeForNarc(apiKey: String, text: String): NarcResult {
+    val system = """
+You are ToneLayer's Narcissist Screen — a protective tool built specifically for neurodivergent people, who are statistically more likely to be targeted by narcissistic and manipulative communication because they tend to trust literally, take responsibility for others' emotions, struggle to identify manipulation in real time, and have often been told their perceptions are wrong.
+
+Analyze the message the user received for manipulation tactics including: gaslighting, DARVO (Deny Attack Reverse Victim Offender), guilt tripping, love bombing, word salad/circular reasoning, moving goalposts, minimizing/dismissing feelings, blame shifting, silent treatment threats, triangulation (invoking third parties), future faking, intermittent reinforcement, covert threats, isolation language, and backhanded compliments.
+
+For nd_impact: explain specifically why THIS tactic hits harder for ND people (ADHD, autism, PTSD/CPTSD). Be direct and validating. Never blame the user.
+
+The validation field must be one clear direct sentence confirming what the user senses is real — not in their head. This is the most important field.
+
+The boundary_script should be calm, short, achievable. Include permission to say nothing — silence is valid.
+
+Return ONLY valid JSON:
+{
+  "risk_level": "high|moderate|low|none",
+  "patterns": [{"name":"tactic name","quote":"exact phrase from message","explanation":"what this tactic does to the reader","nd_impact":"why this hits harder for ND people"}],
+  "summary": "2-3 plain sentences: what this message is doing and why it feels wrong",
+  "validation": "one direct sentence confirming what the user senses is real",
+  "boundary_script": "one calm short response the user could give — or explicit permission to say nothing"
+}
+    """.trimIndent()
+
+    val body = JSONObject().apply {
+        put("model", "claude-haiku-4-5-20251001")
+        put("max_tokens", 4096)
+        put("system", system)
+        put("messages", JSONArray().put(JSONObject().apply {
+            put("role", "user")
+            put("content", "Message to analyze:\n$text\n\nReply with ONLY valid JSON.")
+        }))
+    }
+
+    val conn = (URL("https://api.anthropic.com/v1/messages").openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"; connectTimeout = 30000; readTimeout = 90000; doOutput = true
+        setRequestProperty("x-api-key", apiKey)
+        setRequestProperty("anthropic-version", "2023-06-01")
+        setRequestProperty("Content-Type", "application/json")
+    }
+    OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
+    val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+    val response = stream.bufferedReader().use { it.readText() }
+    if (conn.responseCode !in 200..299) throw ClaudeHttpException(conn.responseCode, response)
+
+    val content = JSONObject(response).getJSONArray("content").getJSONObject(0).getString("text")
+    val parsed  = JSONObject(extractJsonObject(content))
+
+    val patternsArr = parsed.optJSONArray("patterns")
+    val patterns = if (patternsArr != null) {
+        (0 until patternsArr.length()).map { i ->
+            val p = patternsArr.getJSONObject(i)
+            NarcPattern(
+                name        = p.optString("name", ""),
+                quote       = p.optString("quote", ""),
+                explanation = p.optString("explanation", ""),
+                ndImpact    = p.optString("nd_impact", "")
+            )
+        }.filter { it.name.isNotBlank() }
+    } else emptyList()
+
+    return NarcResult(
+        riskLevel      = parsed.optString("risk_level", "none"),
+        patterns       = patterns,
+        summary        = parsed.optString("summary", ""),
+        validation     = parsed.optString("validation", ""),
+        boundaryScript = parsed.optString("boundary_script", "")
+    )
 }
 
 fun extractJsonObject(raw: String): String {
