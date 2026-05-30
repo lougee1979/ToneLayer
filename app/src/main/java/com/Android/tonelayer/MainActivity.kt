@@ -4,22 +4,39 @@
 
 package com.Android.tonelayer
 
-import android.os.Bundle
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.provider.Settings
 import android.content.Intent
+import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
+import com.Android.tonelayer.features.shared.DailyTip
+import com.Android.tonelayer.features.shared.LogStore
+import com.Android.tonelayer.features.shared.RewriteEntry
+import com.Android.tonelayer.features.shared.ToneLayerBlue
+import com.Android.tonelayer.features.shared.NeutralGray
+import com.Android.tonelayer.features.shared.FeatureColors
+import com.Android.tonelayer.features.shared.todayTip
+import com.Android.tonelayer.features.tonelayer.RewriteLevel
+import com.Android.tonelayer.features.tonelayer.buildToneLayerSystem
+import com.Android.tonelayer.features.tonelayer.createToneLayerAnalysis
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -28,83 +45,110 @@ import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.Android.tonelayer.features.shared.FeatureColors
-import com.Android.tonelayer.features.shared.NeutralGray
-import com.Android.tonelayer.features.shared.ToneLayerBlue
-import com.Android.tonelayer.features.tonelayer.createToneLayerAnalysis
-import com.Android.tonelayer.features.tonelayer.toneLayerProfilePrompt
+
+// ─── Shared prefs keys ────────────────────────────────────────────────────────
+
+internal const val PREFS_NAME          = "tonelayer_clarity_prefs"
+internal const val PREF_CLAUDE_API_KEY = "claude_api_key"
+internal const val PREF_AI_CONSENT     = "ai_processing_consent"
+internal const val PREF_SHOW_TEACHING  = "show_teaching_boxes"
+internal const val PREF_SENDER_LENS    = "sender_lens"
+internal const val PREF_REWRITE_LEVEL  = "rewrite_level"
+internal const val PREF_SPIRAL_PAUSE   = "spiral_pause_enabled"
+internal const val PREF_SHOW_EXPL      = "show_explanation"
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum class NeuroProfile(val displayName: String, val description: String) {
+    AUTO(    "Auto",          "Infer · Detect friction · Choose strategy"),
+    ADHD(    "ADHD",          "Tighten · Add structure · Cut tangents"),
+    AUTISM(  "Autism",        "Add warmth · Decode · Literalize · Tone-tag"),
+    PTSD(    "PTSD/CPTSD",    "De-escalate · Boundary set · Decompress"),
+    ADHD_PTSD("ADHD + PTSD", "Blended modes for both profiles"),
+    AUTISM_PTSD("Autism + PTSD","Blended modes for both profiles"),
+    MIXED(   "Mixed / Not Sure","Broad ND-to-NT lens, no diagnosis required")
+}
+
+enum class ToneLayerSection(val label: String) { TONELAYER("ToneLayer"), SETTINGS("Settings") }
+
+fun ToneLayerSection.featureColors(): FeatureColors = when (this) {
+    ToneLayerSection.TONELAYER -> ToneLayerBlue
+    ToneLayerSection.SETTINGS  -> NeutralGray
+}
+
+// ─── Result model ─────────────────────────────────────────────────────────────
+
+data class AndroidRewriteResult(
+    val rewrite: String,
+    val grammarOnly: String,
+    val explanation: String,
+    val distortions: List<String>
+) {
+    val isSpiraling: Boolean get() = distortions.isNotEmpty()
+}
+
+// ─── Activity ─────────────────────────────────────────────────────────────────
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            ToneLayerApp()
-        }
+        setContent { ToneLayerApp() }
     }
 }
 
-private const val PREFS_NAME = "tonelayer_clarity_prefs"
-private const val PREF_CLAUDE_API_KEY = "claude_api_key"
-private const val PREF_AI_CONSENT = "ai_processing_consent"
-private const val PREF_SENDER_LENS = "sender_lens"
-private const val PREF_SHOW_TEACHING = "show_teaching_boxes"
-
-
-enum class NeuroProfile(val displayName: String) {
-    AUTO("Auto"),
-    ADHD("ADHD"),
-    AUTISM("Autism"),
-    PTSD("PTSD/CPTSD"),
-    ADHD_PTSD("ADHD + PTSD"),
-    AUTISM_PTSD("Autism + PTSD"),
-    MIXED("Mixed / Not Sure")
-}
-
-enum class RewriteDirection {
-    ND_TO_NT
-}
-
-enum class RewriteStyle(val buttonLabel: String, val resultTitle: String) {
-    CLEAR("Clarify", "NT rewrite"),
-    SHORTER("Shorter", "Shorter NT rewrite"),
-    WARMER("Warmer", "Warmer NT rewrite"),
-    DIRECT("Direct", "Direct NT rewrite"),
-    SOFTER("Soften", "Softer NT rewrite")
-}
-
-fun storedSenderLens(prefs: android.content.SharedPreferences): NeuroProfile {
-    val stored = prefs.getString(PREF_SENDER_LENS, NeuroProfile.AUTO.name) ?: NeuroProfile.AUTO.name
-    return runCatching { NeuroProfile.valueOf(stored) }.getOrDefault(NeuroProfile.AUTO)
-}
+// ─── Root composable ──────────────────────────────────────────────────────────
 
 @Composable
 fun ToneLayerApp() {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE) }
-    var apiKey by remember { mutableStateOf(prefs.getString(PREF_CLAUDE_API_KEY, "") ?: "") }
-    var aiConsent by remember { mutableStateOf(prefs.getBoolean(PREF_AI_CONSENT, false)) }
-    var showTeachingBoxes by remember { mutableStateOf(prefs.getBoolean(PREF_SHOW_TEACHING, true)) }
-    var selectedSection by remember { mutableStateOf(ToneLayerSection.TONELAYER) }
-    var toneLayerInput by remember {
+    val scope   = rememberCoroutineScope()
+    val prefs   = remember { context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE) }
+
+    // Settings state
+    var apiKey          by remember { mutableStateOf(prefs.getString(PREF_CLAUDE_API_KEY, "") ?: "") }
+    var aiConsent       by remember { mutableStateOf(prefs.getBoolean(PREF_AI_CONSENT, false)) }
+    var showTeaching    by remember { mutableStateOf(prefs.getBoolean(PREF_SHOW_TEACHING, true)) }
+    var showExplanation by remember { mutableStateOf(prefs.getBoolean(PREF_SHOW_EXPL, true)) }
+    var spiralPause     by remember { mutableStateOf(prefs.getBoolean(PREF_SPIRAL_PAUSE, true)) }
+    var profile         by remember {
         mutableStateOf(
-            "I know this is a lot but I keep replaying the conversation and I need to explain what I meant because it feels like everything got tangled."
+            runCatching { NeuroProfile.valueOf(prefs.getString(PREF_SENDER_LENS, NeuroProfile.AUTO.name)!!) }
+                .getOrDefault(NeuroProfile.AUTO)
         )
     }
-    var toneLayerProfile by remember { mutableStateOf(storedSenderLens(prefs)) }
-    var toneLayerRewriteTitle by remember { mutableStateOf("NT rewrite") }
-    var toneLayerRewriteText by remember { mutableStateOf("Your NT rewrite will appear here.") }
-    var toneLayerTeachingText by remember { mutableStateOf(createToneLayerAnalysis(toneLayerInput, toneLayerProfile)) }
-    var isToneLayerRewriting by remember { mutableStateOf(false) }
-    var toneLayerStatus by remember { mutableStateOf("") }
+    var level by remember {
+        mutableStateOf(
+            runCatching { RewriteLevel.valueOf(prefs.getString(PREF_REWRITE_LEVEL, RewriteLevel.MEDIUM.name)!!) }
+                .getOrDefault(RewriteLevel.MEDIUM)
+        )
+    }
+
+    // Composer state
+    var selectedSection by remember { mutableStateOf(ToneLayerSection.TONELAYER) }
+    var inputText       by remember { mutableStateOf("") }
+    var isRewriting     by remember { mutableStateOf(false) }
+    var status          by remember { mutableStateOf("") }
+
+    // Output state
+    var composerOriginal    by remember { mutableStateOf("") }
+    var composerGrammar     by remember { mutableStateOf("") }
+    var composerNT          by remember { mutableStateOf("") }
+    var composerExplanation by remember { mutableStateOf("") }
+    var composerDistortions by remember { mutableStateOf(listOf<String>()) }
+    var selectedOutput      by remember { mutableStateOf("NT version") }
+    var showSpiralCard      by remember { mutableStateOf(false) }
+
+    // Log state
+    var logEntries by remember { mutableStateOf(listOf<RewriteEntry>()) }
+
+    // Load log on start
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            val entries = LogStore.load(context)
+            withContext(Dispatchers.Main) { logEntries = entries }
+        }
+    }
+
     val activeColors = selectedSection.featureColors()
 
     MaterialTheme {
@@ -112,330 +156,463 @@ fun ToneLayerApp() {
             modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    Brush.verticalGradient(
-                        listOf(activeColors.surface, Color.White, activeColors.soft)
-                    )
+                    Brush.verticalGradient(listOf(activeColors.surface, Color.White, activeColors.soft))
                 )
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            ToneLayerHeader(
-                aiConsent = aiConsent,
-                hasApiKey = apiKey.isNotBlank(),
-                featureColors = activeColors
-            )
+            // Header
+            AppHeader(activeColors = activeColors, hasApiKey = apiKey.isNotBlank(), aiConsent = aiConsent)
+            Spacer(Modifier.height(12.dp))
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            ToneLayerSectionSwitch(
-                selectedSection = selectedSection,
-                onSectionSelected = { selectedSection = it }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
+            // Section tabs
+            SectionSwitch(selected = selectedSection, onSelect = { selectedSection = it })
+            Spacer(Modifier.height(16.dp))
 
             when (selectedSection) {
                 ToneLayerSection.TONELAYER -> {
-                    MessageWorkspace(
-                        title = "ToneLayer",
-                        featureColors = ToneLayerBlue,
-                        inputText = toneLayerInput,
-                        rewriteTitle = toneLayerRewriteTitle,
-                        rewriteText = toneLayerRewriteText,
-                        teachingTitle = "Translation Notes",
-                        teachingText = toneLayerTeachingText,
-                        showTeachingBoxes = showTeachingBoxes,
-                        status = toneLayerStatus,
-                        isRewriting = isToneLayerRewriting,
-                        onInputChange = {
-                            toneLayerInput = it
-                            toneLayerTeachingText = createToneLayerAnalysis(it, toneLayerProfile)
+                    // Daily tip
+                    DailyTipCard(tip = todayTip(), featureColors = ToneLayerBlue)
+                    Spacer(Modifier.height(16.dp))
+
+                    // Composer
+                    ComposerCard(
+                        inputText       = inputText,
+                        level           = level,
+                        isRewriting     = isRewriting,
+                        status          = status,
+                        featureColors   = ToneLayerBlue,
+                        onInputChange   = { inputText = it },
+                        onLevelChange   = { l ->
+                            level = l
+                            prefs.edit { putString(PREF_REWRITE_LEVEL, l.name) }
                         },
-                        onRewriteSelected = { style ->
-                            val input = toneLayerInput.trim()
-                            if (input.isBlank()) {
-                                toneLayerStatus = "Enter a message first"
-                                return@MessageWorkspace
-                            }
-                            toneLayerRewriteTitle = style.resultTitle
-                            isToneLayerRewriting = true
-                            toneLayerStatus = "Translating for NT readability..."
-                            requestRewrite(
-                                prefs = prefs,
-                                scope = scope,
-                                apiKey = apiKey,
-                                aiConsent = aiConsent,
-                                input = input,
-                                profile = toneLayerProfile,
-                                style = style,
-                                direction = RewriteDirection.ND_TO_NT,
-                                onResult = {
-                                    toneLayerRewriteText = it.rewrite
-                                    toneLayerTeachingText = it.teaching
-                                    isToneLayerRewriting = false
-                                    toneLayerStatus = "Ready"
+                        onPaste = {
+                            val cb = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cb.primaryClip?.getItemAt(0)?.text?.toString()?.let { inputText = it }
+                        },
+                        onClear = {
+                            inputText = ""
+                            composerOriginal = ""; composerGrammar = ""; composerNT = ""
+                            composerExplanation = ""; composerDistortions = emptyList()
+                            showSpiralCard = false; status = ""
+                        },
+                        onRewrite = {
+                            val input = inputText.trim()
+                            if (input.isBlank()) { status = "Type something first"; return@ComposerCard }
+                            isRewriting = true
+                            status = "Rewriting ${input.length} chars…"
+                            composerOriginal = input
+                            composerGrammar = ""; composerNT = ""
+                            composerExplanation = ""; composerDistortions = emptyList()
+                            showSpiralCard = false
+                            selectedOutput = "NT version"
+
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    if (!aiConsent || apiKey.isBlank()) {
+                                        AndroidRewriteResult(
+                                            rewrite = input,
+                                            grammarOnly = input,
+                                            explanation = "Add your Claude API key and enable AI processing in Settings to use live rewrites.",
+                                            distortions = emptyList()
+                                        )
+                                    } else {
+                                        runCatching { callClaudeForApp(apiKey.trim(), input, profile, level) }
+                                            .getOrElse { err ->
+                                                AndroidRewriteResult(
+                                                    rewrite = input,
+                                                    grammarOnly = input,
+                                                    explanation = friendlyClaudeFailure(err),
+                                                    distortions = emptyList()
+                                                )
+                                            }
+                                    }
                                 }
-                            )
-                        },
-                        onCopyRewrite = {
-                            copyToClipboard(context, toneLayerRewriteText)
-                            incrementMetric(prefs, "android.tonelayer.rewrite.copied")
-                            incrementMetric(prefs, "android.tonelayer.rewrite.accepted")
-                            toneLayerStatus = "Copied"
-                        },
-                        onShareRewrite = {
-                            shareText(context, toneLayerRewriteText)
-                            incrementMetric(prefs, "android.tonelayer.rewrite.shared")
-                            incrementMetric(prefs, "android.tonelayer.rewrite.accepted")
+                                isRewriting = false
+                                composerGrammar     = result.grammarOnly.ifBlank { input }
+                                composerNT          = result.rewrite
+                                composerExplanation = result.explanation
+                                composerDistortions = result.distortions
+                                status = "Ready"
+
+                                if (spiralPause && result.isSpiraling) {
+                                    showSpiralCard = true
+                                }
+
+                                // Save to log
+                                withContext(Dispatchers.IO) {
+                                    LogStore.append(context, RewriteEntry(
+                                        profile      = profile.displayName,
+                                        level        = level.displayName,
+                                        originalText = input,
+                                        rewrittenText = result.rewrite,
+                                        explanation  = result.explanation,
+                                        distortions  = result.distortions,
+                                        spiraling    = result.isSpiraling
+                                    ))
+                                    val updated = LogStore.load(context)
+                                    withContext(Dispatchers.Main) { logEntries = updated }
+                                }
+                            }
                         }
                     )
+                    Spacer(Modifier.height(16.dp))
+
+                    // Spiral card
+                    if (showSpiralCard) {
+                        SpiralCard(
+                            onAsIs   = { showSpiralCard = false },
+                            onGrammar = { selectedOutput = "Grammar only"; showSpiralCard = false },
+                            onNT     = { selectedOutput = "NT version"; showSpiralCard = false }
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    // Output card
+                    val hasOutput = composerNT.isNotBlank()
+                    if (hasOutput) {
+                        OutputCard(
+                            original        = composerOriginal,
+                            grammarOnly     = composerGrammar,
+                            ntVersion       = composerNT,
+                            selectedOutput  = selectedOutput,
+                            featureColors   = ToneLayerBlue,
+                            onTabSelect     = { selectedOutput = it },
+                            onCopy = {
+                                val text = selectedOutputText(selectedOutput, composerOriginal, composerGrammar, composerNT)
+                                copyToClipboard(context, text)
+                                status = "Copied"
+                            },
+                            onShare = {
+                                val text = selectedOutputText(selectedOutput, composerOriginal, composerGrammar, composerNT)
+                                shareText(context, text)
+                            }
+                        )
+                        Spacer(Modifier.height(16.dp))
+                    }
+
+                    // Explanation card
+                    if (hasOutput && showExplanation && composerExplanation.isNotBlank()) {
+                        ExplanationCard(explanation = composerExplanation, featureColors = ToneLayerBlue)
+                        Spacer(Modifier.height(16.dp))
+                    }
+
+                    // Log card
+                    LogCard(entries = logEntries, featureColors = ToneLayerBlue)
+                    Spacer(Modifier.height(60.dp))
                 }
+
                 ToneLayerSection.SETTINGS -> {
-                    ToneLayerSettings(
-                        apiKey = apiKey,
-                        aiConsent = aiConsent,
-                        showTeachingBoxes = showTeachingBoxes,
-                        senderLens = toneLayerProfile,
-                        onApiKeyChange = {
-                            apiKey = it
-                            prefs.edit { putString(PREF_CLAUDE_API_KEY, it.trim()) }
-                        },
-                        onConsentChange = {
-                            aiConsent = it
-                            prefs.edit { putBoolean(PREF_AI_CONSENT, it) }
-                        },
-                        onTeachingBoxesChange = {
-                            showTeachingBoxes = it
-                            prefs.edit { putBoolean(PREF_SHOW_TEACHING, it) }
-                        },
-                        onSenderLensSelected = {
-                            toneLayerProfile = it
-                            toneLayerTeachingText = createToneLayerAnalysis(toneLayerInput, it)
-                            prefs.edit { putString(PREF_SENDER_LENS, it.name) }
-                        },
-                        onOpenKeyboardSettings = {
-                            openKeyboardSettings(context)
-                        }
+                    SettingsScreen(
+                        apiKey          = apiKey,
+                        aiConsent       = aiConsent,
+                        showTeaching    = showTeaching,
+                        showExplanation = showExplanation,
+                        spiralPause     = spiralPause,
+                        profile         = profile,
+                        level           = level,
+                        onApiKeyChange  = { apiKey = it; prefs.edit { putString(PREF_CLAUDE_API_KEY, it.trim()) } },
+                        onConsentChange = { aiConsent = it; prefs.edit { putBoolean(PREF_AI_CONSENT, it) } },
+                        onTeachingChange = { showTeaching = it; prefs.edit { putBoolean(PREF_SHOW_TEACHING, it) } },
+                        onExplChange     = { showExplanation = it; prefs.edit { putBoolean(PREF_SHOW_EXPL, it) } },
+                        onSpiralChange   = { spiralPause = it; prefs.edit { putBoolean(PREF_SPIRAL_PAUSE, it) } },
+                        onProfileChange  = { profile = it; prefs.edit { putString(PREF_SENDER_LENS, it.name) } },
+                        onLevelChange    = { level = it; prefs.edit { putString(PREF_REWRITE_LEVEL, it.name) } },
+                        onOpenKeyboard   = { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
                     )
+                    Spacer(Modifier.height(60.dp))
                 }
             }
-
-            Spacer(modifier = Modifier.height(60.dp))
         }
     }
 }
 
-enum class ToneLayerSection(val label: String) {
-    TONELAYER("ToneLayer"),
-    SETTINGS("Settings")
-}
-
-fun ToneLayerSection.featureColors(): FeatureColors {
-    return when (this) {
-        ToneLayerSection.TONELAYER -> ToneLayerBlue
-        ToneLayerSection.SETTINGS -> NeutralGray
-    }
-}
+// ─── Header ───────────────────────────────────────────────────────────────────
 
 @Composable
-fun ToneLayerHeader(aiConsent: Boolean, hasApiKey: Boolean, featureColors: FeatureColors) {
+fun AppHeader(activeColors: FeatureColors, hasApiKey: Boolean, aiConsent: Boolean) {
     Column {
-        Text(
-            text = "ToneLayer",
-            fontSize = 30.sp,
-            fontWeight = FontWeight.Bold,
-            color = featureColors.primary
+        Text("ToneLayer", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = activeColors.primary)
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth()) {
+            StatusPill("Mode", "ND → NT", activeColors, Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            StatusPill("Live AI", if (aiConsent && hasApiKey) "On" else "Local", activeColors, Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(10.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(5.dp)
+                .background(Brush.horizontalGradient(listOf(activeColors.primary, activeColors.secondary)))
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            StatusPill(
-                label = "Mode",
-                value = "ND -> NT",
-                featureColors = featureColors,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            StatusPill(
-                label = "Live AI",
-                value = if (aiConsent && hasApiKey) "On" else "Local",
-                featureColors = featureColors,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Spacer(modifier = Modifier.height(10.dp))
-        ColorDirectionStrip(featureColors)
     }
 }
 
 @Composable
-fun StatusPill(label: String, value: String, featureColors: FeatureColors, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier,
-        color = featureColors.soft,
-        shape = MaterialTheme.shapes.medium,
-        tonalElevation = 1.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+fun StatusPill(label: String, value: String, colors: FeatureColors, modifier: Modifier = Modifier) {
+    Surface(modifier = modifier, color = colors.soft, shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(label, fontSize = 13.sp, color = Color.Gray)
-            Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = featureColors.primary)
+            Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
         }
     }
 }
 
-@Composable
-fun ColorDirectionStrip(featureColors: FeatureColors) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(6.dp)
-            .background(Brush.horizontalGradient(listOf(featureColors.primary, featureColors.secondary)))
-    )
-}
+// ─── Section switch ───────────────────────────────────────────────────────────
 
 @Composable
-fun ToneLayerSectionSwitch(
-    selectedSection: ToneLayerSection,
-    onSectionSelected: (ToneLayerSection) -> Unit
-) {
-    Row(modifier = Modifier.fillMaxWidth()) {
-        ToneLayerSection.entries.forEach { section ->
-            val selected = selectedSection == section
-            val colors = section.featureColors()
-            if (selected) {
-                Button(
-                    onClick = { onSectionSelected(section) },
-                    modifier = Modifier.weight(1f),
+fun SectionSwitch(selected: ToneLayerSection, onSelect: (ToneLayerSection) -> Unit) {
+    Row(Modifier.fillMaxWidth()) {
+        ToneLayerSection.entries.forEachIndexed { i, section ->
+            val isSelected = selected == section
+            val colors     = section.featureColors()
+            if (isSelected) {
+                Button(onClick = { onSelect(section) }, modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
                 ) { Text(section.label) }
             } else {
-                OutlinedButton(
-                    onClick = { onSectionSelected(section) },
-                    modifier = Modifier.weight(1f),
-                    border = BorderStroke(1.dp, colors.outline),
+                OutlinedButton(onClick = { onSelect(section) }, modifier = Modifier.weight(1f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colors.outline),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.primary)
                 ) { Text(section.label) }
             }
-            if (section != ToneLayerSection.entries.last()) {
-                Spacer(modifier = Modifier.width(8.dp))
+            if (i < ToneLayerSection.entries.size - 1) Spacer(Modifier.width(8.dp))
+        }
+    }
+}
+
+// ─── Daily tip ────────────────────────────────────────────────────────────────
+
+@Composable
+fun DailyTipCard(tip: DailyTip, featureColors: FeatureColors) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = featureColors.surface)) {
+        Column(Modifier.padding(16.dp)) {
+            Text("✨  FYI of the day", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = featureColors.primary)
+            Spacer(Modifier.height(6.dp))
+            Text(tip.title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(tip.body, fontSize = 13.sp, lineHeight = 18.sp, color = Color(0xFF374151))
+        }
+    }
+}
+
+// ─── Composer ─────────────────────────────────────────────────────────────────
+
+@Composable
+fun ComposerCard(
+    inputText: String,
+    level: RewriteLevel,
+    isRewriting: Boolean,
+    status: String,
+    featureColors: FeatureColors,
+    onInputChange: (String) -> Unit,
+    onLevelChange: (RewriteLevel) -> Unit,
+    onPaste: () -> Unit,
+    onClear: () -> Unit,
+    onRewrite: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = featureColors.surface)) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Composer", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = featureColors.primary, modifier = Modifier.weight(1f))
+                if (inputText.isNotEmpty()) {
+                    Text("${inputText.length} chars", fontSize = 12.sp, color = Color.Gray)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            // Level picker (L / M / S)
+            Row(Modifier.fillMaxWidth()) {
+                RewriteLevel.entries.forEachIndexed { i, l ->
+                    val selected = level == l
+                    if (selected) {
+                        Button(
+                            onClick = { onLevelChange(l) },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = featureColors.primary)
+                        ) { Text(l.shortLabel, fontWeight = FontWeight.Bold) }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onLevelChange(l) },
+                            modifier = Modifier.weight(1f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, featureColors.outline),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = featureColors.primary)
+                        ) { Text(l.shortLabel) }
+                    }
+                    if (i < RewriteLevel.entries.size - 1) Spacer(Modifier.width(6.dp))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = when (level) {
+                    RewriteLevel.LIGHT  -> "L — Small adjustments, keep your wording close"
+                    RewriteLevel.MEDIUM -> "M — Restructured for NT readers while sounding like you"
+                    RewriteLevel.STRONG -> "S — Full ND-to-NT translation"
+                },
+                fontSize = 12.sp, color = Color.Gray
+            )
+            Spacer(Modifier.height(12.dp))
+
+            // Text input
+            OutlinedTextField(
+                value = inputText,
+                onValueChange = onInputChange,
+                modifier = Modifier.fillMaxWidth().height(200.dp),
+                placeholder = { Text("Type or paste the brain dump…", color = Color.Gray) }
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // Paste / Clear
+            Row(Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onPaste, modifier = Modifier.weight(1f)) { Text("Paste") }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = onClear, modifier = Modifier.weight(1f), enabled = inputText.isNotEmpty()) { Text("Clear") }
+            }
+            Spacer(Modifier.height(10.dp))
+
+            // Rewrite button
+            Button(
+                onClick = onRewrite,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isRewriting && inputText.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isRewriting) featureColors.primary.copy(alpha = 0.5f) else featureColors.primary
+                )
+            ) {
+                if (isRewriting) {
+                    CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Rewriting…", fontWeight = FontWeight.Bold)
+                } else {
+                    Text("✨  Rewrite", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            if (status.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(status, fontSize = 12.sp, color = Color.Gray)
             }
         }
     }
 }
 
+// ─── Spiral card ──────────────────────────────────────────────────────────────
+
 @Composable
-fun MessageWorkspace(
-    title: String,
-    featureColors: FeatureColors,
-    inputText: String,
-    rewriteTitle: String,
-    rewriteText: String,
-    teachingTitle: String,
-    teachingText: String,
-    showTeachingBoxes: Boolean,
-    status: String,
-    isRewriting: Boolean,
-    onInputChange: (String) -> Unit,
-    onRewriteSelected: (RewriteStyle) -> Unit,
-    onCopyRewrite: () -> Unit,
-    onShareRewrite: () -> Unit
-) {
-    Text(
-        text = title,
-        fontSize = 22.sp,
-        fontWeight = FontWeight.Bold,
-        color = featureColors.primary
-    )
-
-    Spacer(modifier = Modifier.height(12.dp))
-
-    OutlinedTextField(
-        value = inputText,
-        onValueChange = onInputChange,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(180.dp),
-        label = { Text("Message") }
-    )
-
-    MessageLengthFlag(inputText)
-
-    Spacer(modifier = Modifier.height(16.dp))
-
-    RewriteTools(
-        enabled = !isRewriting,
-        onRewriteSelected = onRewriteSelected,
-        featureColors = featureColors
-    )
-
-    Spacer(modifier = Modifier.height(8.dp))
-    if (status.isNotBlank()) {
-        Text(status, fontSize = 13.sp, color = Color.Gray)
-    }
-    Spacer(modifier = Modifier.height(16.dp))
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = featureColors.surface)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = rewriteTitle,
-                fontWeight = FontWeight.Bold,
-                fontSize = 22.sp,
-                color = featureColors.primary
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            SelectionContainer {
-                Text(
-                    text = rewriteText,
-                    fontSize = 17.sp,
-                    lineHeight = 26.sp
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
+fun SpiralCard(onAsIs: () -> Unit, onGrammar: () -> Unit, onNT: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5))) {
+        Column(Modifier.padding(14.dp)) {
+            Text("💚  Pause for a sec?", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Spacer(Modifier.height(4.dp))
+            Text("Your text has some patterns that might land differently than you intend.", fontSize = 13.sp, color = Color.Gray)
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onAsIs, modifier = Modifier.weight(1f)) { Text("As-is", fontSize = 12.sp) }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(onClick = onGrammar, modifier = Modifier.weight(1f)) { Text("Grammar", fontSize = 12.sp) }
+                Spacer(Modifier.width(6.dp))
                 Button(
-                    onClick = onCopyRewrite,
-                    modifier = Modifier.weight(1f),
-                    enabled = rewriteText.isNotBlank() && !rewriteText.startsWith("Your "),
+                    onClick = onNT, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+                ) { Text("NT", fontSize = 12.sp, color = Color.White) }
+            }
+        }
+    }
+}
+
+// ─── Output card ──────────────────────────────────────────────────────────────
+
+@Composable
+fun OutputCard(
+    original: String,
+    grammarOnly: String,
+    ntVersion: String,
+    selectedOutput: String,
+    featureColors: FeatureColors,
+    onTabSelect: (String) -> Unit,
+    onCopy: () -> Unit,
+    onShare: () -> Unit
+) {
+    val tabs = listOf("Original", "Grammar only", "NT version")
+    val displayText = selectedOutputText(selectedOutput, original, grammarOnly, ntVersion)
+
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = featureColors.surface)) {
+        Column(Modifier.padding(16.dp)) {
+            // Tab row
+            Row(Modifier.fillMaxWidth()) {
+                tabs.forEachIndexed { i, tab ->
+                    val selected = selectedOutput == tab
+                    if (selected) {
+                        Button(onClick = { onTabSelect(tab) }, modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = featureColors.primary),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                        ) { Text(tab, fontSize = 11.sp, maxLines = 1) }
+                    } else {
+                        OutlinedButton(onClick = { onTabSelect(tab) }, modifier = Modifier.weight(1f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, featureColors.outline),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = featureColors.primary),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                        ) { Text(tab, fontSize = 11.sp, maxLines = 1) }
+                    }
+                    if (i < tabs.size - 1) Spacer(Modifier.width(4.dp))
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            SelectionContainer {
+                Text(displayText, fontSize = 16.sp, lineHeight = 24.sp)
+            }
+            Spacer(Modifier.height(12.dp))
+
+            Row(Modifier.fillMaxWidth()) {
+                Button(onClick = onCopy, modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = featureColors.primary)
                 ) { Text("Copy") }
-                Spacer(modifier = Modifier.width(8.dp))
-                OutlinedButton(
-                    onClick = onShareRewrite,
-                    modifier = Modifier.weight(1f),
-                    enabled = rewriteText.isNotBlank() && !rewriteText.startsWith("Your "),
-                    border = BorderStroke(1.dp, featureColors.outline),
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, featureColors.outline),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = featureColors.primary)
                 ) { Text("Share") }
             }
         }
     }
+}
 
-    if (showTeachingBoxes) {
-        Spacer(modifier = Modifier.height(24.dp))
+// ─── Explanation card ─────────────────────────────────────────────────────────
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = featureColors.surface)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = teachingTitle,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp,
-                    color = featureColors.primary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                SelectionContainer {
-                    Text(
-                        text = teachingText,
-                        fontSize = 17.sp,
-                        lineHeight = 26.sp
-                    )
+@Composable
+fun ExplanationCard(explanation: String, featureColors: FeatureColors) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = featureColors.surface)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("💡  Teaching explanation", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = featureColors.primary)
+            Spacer(Modifier.height(6.dp))
+            Text(explanation, fontSize = 14.sp, lineHeight = 20.sp)
+        }
+    }
+}
+
+// ─── Log card ─────────────────────────────────────────────────────────────────
+
+@Composable
+fun LogCard(entries: List<RewriteEntry>, featureColors: FeatureColors) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = featureColors.surface)) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Rewrite Log", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = featureColors.primary, modifier = Modifier.weight(1f))
+                if (entries.isNotEmpty()) {
+                    Text("${entries.size} entries", fontSize = 12.sp, color = Color.Gray)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            if (entries.isEmpty()) {
+                Text("Your rewrite history will appear here after your first rewrite.", fontSize = 13.sp, color = Color.Gray)
+            } else {
+                entries.takeLast(10).reversed().forEach { entry ->
+                    LogRow(entry = entry, featureColors = featureColors)
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
@@ -443,338 +620,261 @@ fun MessageWorkspace(
 }
 
 @Composable
-fun ToneLayerSettings(
+fun LogRow(entry: RewriteEntry, featureColors: FeatureColors) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(color = featureColors.primary.copy(alpha = 0.12f), shape = MaterialTheme.shapes.small) {
+                    Text(entry.profile, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                }
+                Spacer(Modifier.width(6.dp))
+                Text("·  ${entry.level}", fontSize = 11.sp, color = Color.Gray)
+            }
+            if (entry.explanation.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(entry.explanation, fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(3.dp))
+            val preview = entry.rewrittenText.take(100) + if (entry.rewrittenText.length > 100) "…" else ""
+            Text(preview, fontSize = 12.sp, color = Color.Gray, maxLines = 2)
+        }
+    }
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+@Composable
+fun SettingsScreen(
     apiKey: String,
     aiConsent: Boolean,
-    showTeachingBoxes: Boolean,
-    senderLens: NeuroProfile,
+    showTeaching: Boolean,
+    showExplanation: Boolean,
+    spiralPause: Boolean,
+    profile: NeuroProfile,
+    level: RewriteLevel,
     onApiKeyChange: (String) -> Unit,
     onConsentChange: (Boolean) -> Unit,
-    onTeachingBoxesChange: (Boolean) -> Unit,
-    onSenderLensSelected: (NeuroProfile) -> Unit,
-    onOpenKeyboardSettings: () -> Unit
+    onTeachingChange: (Boolean) -> Unit,
+    onExplChange: (Boolean) -> Unit,
+    onSpiralChange: (Boolean) -> Unit,
+    onProfileChange: (NeuroProfile) -> Unit,
+    onLevelChange: (RewriteLevel) -> Unit,
+    onOpenKeyboard: () -> Unit
 ) {
-    Text(
-        text = "Settings",
-        fontSize = 22.sp,
-        fontWeight = FontWeight.Bold
+    Column {
+        // API + Privacy
+        ApiPrivacyCard(apiKey = apiKey, aiConsent = aiConsent,
+            onApiKeyChange = onApiKeyChange, onConsentChange = onConsentChange)
+        Spacer(Modifier.height(16.dp))
+
+        // Profile
+        ProfileCard(selected = profile, featureColors = ToneLayerBlue, onSelect = onProfileChange)
+        Spacer(Modifier.height(16.dp))
+
+        // NT Level
+        LevelCard(selected = level, featureColors = ToneLayerBlue, onSelect = onLevelChange)
+        Spacer(Modifier.height(16.dp))
+
+        // Spiral Pause
+        SpiralPauseCard(enabled = spiralPause, onChange = onSpiralChange)
+        Spacer(Modifier.height(16.dp))
+
+        // Teaching explanations
+        ToggleCard(
+            title = "Teaching Explanations",
+            description = "Show a short note explaining what changed and why. Turn this off when you only want the rewrite.",
+            enabled = showExplanation,
+            onChange = onExplChange
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // Keyboard
+        KeyboardCard(showTeaching = showTeaching, onTeachingChange = onTeachingChange, onOpenKeyboard = onOpenKeyboard)
+    }
+}
+
+@Composable
+fun ApiPrivacyCard(apiKey: String, aiConsent: Boolean, onApiKeyChange: (String) -> Unit, onConsentChange: (Boolean) -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Claude API Key", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(Modifier.height(6.dp))
+            Text("Your key is stored locally. Get yours at console.anthropic.com.", fontSize = 13.sp, color = Color.Gray, lineHeight = 18.sp)
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(value = apiKey, onValueChange = onApiKeyChange, modifier = Modifier.fillMaxWidth(),
+                label = { Text("sk-ant-…") }, singleLine = true)
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = aiConsent, onCheckedChange = onConsentChange)
+                Text("I understand and consent to AI processing for rewrites.", fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun ProfileCard(selected: NeuroProfile, featureColors: FeatureColors, onSelect: (NeuroProfile) -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Profile", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(Modifier.height(6.dp))
+            Text("Pick the profile that matches how you communicate.", fontSize = 13.sp, color = Color.Gray)
+            Spacer(Modifier.height(10.dp))
+            NeuroProfile.entries.forEach { p ->
+                val isSelected = selected == p
+                OutlinedButton(
+                    onClick = { onSelect(p) },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) featureColors.primary else featureColors.outline
+                    ),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (isSelected) featureColors.soft else Color.Transparent,
+                        contentColor   = featureColors.primary
+                    )
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalAlignment = Alignment.Start) {
+                        Text(p.displayName, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
+                        Text(p.description, fontSize = 11.sp, color = Color.Gray)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LevelCard(selected: RewriteLevel, featureColors: FeatureColors, onSelect: (RewriteLevel) -> Unit) {
+    val descriptions = mapOf(
+        RewriteLevel.LIGHT  to "Small ND-to-NT adjustments: fixes clarity, grammar, and tone while keeping your wording close.",
+        RewriteLevel.MEDIUM to "Balanced ND-to-NT rewrite: restructures the message for NT readers while still sounding like you.",
+        RewriteLevel.STRONG to "Full ND-to-NT translation: concise, direct, emotionally neutral, and easy for NT readers to act on."
     )
-    Spacer(modifier = Modifier.height(12.dp))
-    AndroidSetupCard(
-        apiKey = apiKey,
-        aiConsent = aiConsent,
-        onApiKeyChange = onApiKeyChange,
-        onConsentChange = onConsentChange
-    )
-    Spacer(modifier = Modifier.height(16.dp))
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Sender Lens", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Spacer(modifier = Modifier.height(8.dp))
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("NT Level", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(Modifier.height(6.dp))
+            Text("Choose how strongly ToneLayer translates ND speech into NT speech.", fontSize = 13.sp, color = Color.Gray)
+            Spacer(Modifier.height(10.dp))
+            RewriteLevel.entries.forEach { l ->
+                val isSelected = selected == l
+                OutlinedButton(
+                    onClick = { onSelect(l) },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) featureColors.primary else featureColors.outline
+                    ),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (isSelected) featureColors.soft else Color.Transparent,
+                        contentColor   = featureColors.primary
+                    )
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalAlignment = Alignment.Start) {
+                        Text(l.displayName, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
+                        Text(descriptions[l] ?: "", fontSize = 11.sp, color = Color.Gray, lineHeight = 16.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SpiralPauseCard(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Spiral Pause", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                Switch(checked = enabled, onCheckedChange = onChange)
+            }
+            Spacer(Modifier.height(6.dp))
             Text(
-                "Optional private setting for your communication pattern. Leave this on Auto unless a specific lens helps.",
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            ProfileSelector(
-                selectedProfile = senderLens,
-                onProfileSelected = onSenderLensSelected,
-                featureColors = ToneLayerBlue
+                "Before rewriting, ToneLayer checks if your text shows cognitive distortions (catastrophizing, all-or-nothing, mind-reading, etc.). If it does, it pauses and offers a calmer draft.",
+                fontSize = 13.sp, color = Color.Gray, lineHeight = 18.sp
             )
         }
     }
-    Spacer(modifier = Modifier.height(16.dp))
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Keyboard", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "Enable ToneLayer as a keyboard to rewrite selected text from other apps.",
-                fontSize = 14.sp,
-                lineHeight = 20.sp
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+}
+
+@Composable
+fun ToggleCard(title: String, description: String, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = showTeachingBoxes, onCheckedChange = onTeachingBoxesChange)
-                Text("Show teaching boxes in the app and keyboard.", fontSize = 13.sp)
+                Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                Switch(checked = enabled, onCheckedChange = onChange)
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(
-                onClick = onOpenKeyboardSettings,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Spacer(Modifier.height(6.dp))
+            Text(description, fontSize = 13.sp, color = Color.Gray, lineHeight = 18.sp)
+        }
+    }
+}
+
+@Composable
+fun KeyboardCard(showTeaching: Boolean, onTeachingChange: (Boolean) -> Unit, onOpenKeyboard: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Keyboard", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(Modifier.height(6.dp))
+            Text("Enable ToneLayer as a keyboard to rewrite text from any app.", fontSize = 13.sp, color = Color.Gray)
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = showTeaching, onCheckedChange = onTeachingChange)
+                Text("Show teaching boxes in keyboard", fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = onOpenKeyboard, modifier = Modifier.fillMaxWidth()) {
                 Text("Open Keyboard Settings")
             }
         }
     }
 }
 
-fun openKeyboardSettings(context: android.content.Context) {
-    context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+fun selectedOutputText(tab: String, original: String, grammar: String, nt: String): String = when (tab) {
+    "Original"     -> original
+    "Grammar only" -> grammar.ifBlank { original }
+    else           -> nt.ifBlank { grammar.ifBlank { original } }
 }
 
-@Composable
-fun AndroidSetupCard(
-    apiKey: String,
-    aiConsent: Boolean,
-    onApiKeyChange: (String) -> Unit,
-    onConsentChange: (Boolean) -> Unit
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Privacy + API", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "ToneLayer sends the message text you choose to clarify to the AI provider so it can rewrite it. Do not use private secrets, passwords, or medical record numbers in test messages.",
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = aiConsent, onCheckedChange = onConsentChange)
-                Text("I understand and consent to AI processing for rewrites.", fontSize = 13.sp)
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = onApiKeyChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Claude API key") },
-                singleLine = true
-            )
-        }
-    }
+fun copyToClipboard(context: android.content.Context, text: String) {
+    val cb = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cb.setPrimaryClip(ClipData.newPlainText("ToneLayer rewrite", text))
 }
 
-@Composable
-fun MessageLengthFlag(inputText: String) {
-    val words = inputText.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size
-    val chars = inputText.length
-    val isLong = chars >= 700 || words >= 120
-    Text(
-        text = "$chars chars • $words words",
-        fontSize = 12.sp,
-        color = Color.Gray,
-        modifier = Modifier.padding(top = 6.dp)
+fun shareText(context: android.content.Context, text: String) {
+    context.startActivity(
+        Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"; putExtra(Intent.EXTRA_TEXT, text)
+        }, "Send rewrite")
     )
-    if (isLong) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3D6))
-        ) {
-            Text(
-                text = "This is getting long for a text. Are you okay? If this is turning into a novel, try Clarify or Make Brief before sending.",
-                modifier = Modifier.padding(12.dp),
-                fontSize = 14.sp,
-                lineHeight = 20.sp
-            )
-        }
-    }
-}
-
-@Composable
-fun RewriteTools(
-    enabled: Boolean = true,
-    featureColors: FeatureColors,
-    onRewriteSelected: (RewriteStyle) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = featureColors.soft)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "Rewrite Tools",
-                fontWeight = FontWeight.Bold,
-                fontSize = 20.sp,
-                color = featureColors.primary
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Button(
-                    onClick = { onRewriteSelected(RewriteStyle.CLEAR) },
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled,
-                    colors = ButtonDefaults.buttonColors(containerColor = featureColors.primary)
-                ) { Text(RewriteStyle.CLEAR.buttonLabel) }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = { onRewriteSelected(RewriteStyle.SHORTER) },
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled,
-                    colors = ButtonDefaults.buttonColors(containerColor = featureColors.primary)
-                ) { Text(RewriteStyle.SHORTER.buttonLabel) }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Button(
-                    onClick = { onRewriteSelected(RewriteStyle.WARMER) },
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled,
-                    colors = ButtonDefaults.buttonColors(containerColor = featureColors.primary)
-                ) { Text(RewriteStyle.WARMER.buttonLabel) }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = { onRewriteSelected(RewriteStyle.DIRECT) },
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled,
-                    colors = ButtonDefaults.buttonColors(containerColor = featureColors.primary)
-                ) { Text(RewriteStyle.DIRECT.buttonLabel) }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = { onRewriteSelected(RewriteStyle.SOFTER) },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = enabled,
-                border = BorderStroke(1.dp, featureColors.outline),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = featureColors.primary)
-            ) { Text(RewriteStyle.SOFTER.buttonLabel) }
-        }
-    }
-}
-
-@Composable
-fun ProfileSelector(
-    selectedProfile: NeuroProfile,
-    onProfileSelected: (NeuroProfile) -> Unit,
-    featureColors: FeatureColors
-) {
-    Column {
-        NeuroProfile.entries.forEach { profile ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(
-                    selected = selectedProfile == profile,
-                    onClick = { onProfileSelected(profile) },
-                    colors = RadioButtonDefaults.colors(selectedColor = featureColors.primary)
-                )
-                Text(text = profile.displayName)
-            }
-        }
-    }
-}
-
-
-data class AndroidRewriteResult(
-    val rewrite: String,
-    val teaching: String
-)
-
-fun requestRewrite(
-    prefs: android.content.SharedPreferences,
-    scope: kotlinx.coroutines.CoroutineScope,
-    apiKey: String,
-    aiConsent: Boolean,
-    input: String,
-    profile: NeuroProfile,
-    style: RewriteStyle,
-    direction: RewriteDirection,
-    onResult: (AndroidRewriteResult) -> Unit
-) {
-    incrementMetric(prefs, "android.${direction.name.lowercase()}.rewrite.requested")
-    incrementMetric(prefs, "android.${direction.name.lowercase()}.rewrite.style.${style.name}")
-    if (input.length >= 700 || input.split(Regex("\\s+")).filter { it.isNotBlank() }.size >= 120) {
-        incrementMetric(prefs, "android.${direction.name.lowercase()}.longMessage.flagged")
-    }
-    scope.launch {
-        val result = withContext(Dispatchers.IO) {
-            if (!aiConsent || apiKey.isBlank()) {
-                AndroidRewriteResult(
-                    rewrite = createRewriteResult(input, profile, style, direction),
-                    teaching = fallbackTeaching(
-                        input,
-                        profile,
-                        style,
-                        direction,
-                        "Add your Claude API key and enable AI processing in Settings to use live structured rewrites."
-                    )
-                )
-            } else {
-                runCatching { callClaudeForApp(apiKey.trim(), input, profile, style, direction) }
-                    .getOrElse {
-                        AndroidRewriteResult(
-                            rewrite = createRewriteResult(input, profile, style, direction),
-                            teaching = fallbackTeaching(
-                                input,
-                                profile,
-                                style,
-                                direction,
-                                friendlyClaudeFailure(it)
-                            )
-                        )
-                    }
-            }
-        }
-        onResult(result)
-        incrementMetric(prefs, "android.${direction.name.lowercase()}.rewrite.success")
-    }
 }
 
 fun incrementMetric(prefs: android.content.SharedPreferences, key: String, amount: Int = 1) {
     val fullKey = "metrics.$key"
-    prefs.edit {
-        putInt(fullKey, prefs.getInt(fullKey, 0) + amount)
-        putLong("metrics.lastUpdated", System.currentTimeMillis())
-    }
+    prefs.edit { putInt(fullKey, prefs.getInt(fullKey, 0) + amount) }
 }
 
-fun copyToClipboard(context: android.content.Context, text: String) {
-    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
-    clipboard.setPrimaryClip(ClipData.newPlainText("ToneLayer rewrite", text))
-}
-
-fun shareText(context: android.content.Context, text: String) {
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_TEXT, text)
-    }
-    context.startActivity(Intent.createChooser(intent, "Send rewrite"))
-}
+// ─── Claude API ───────────────────────────────────────────────────────────────
 
 fun callClaudeForApp(
     apiKey: String,
     text: String,
     profile: NeuroProfile,
-    style: RewriteStyle,
-    direction: RewriteDirection
+    level: RewriteLevel
 ): AndroidRewriteResult {
-    val profileInstruction = toneLayerProfilePrompt(profile)
-    val styleInstruction = when (style) {
-        RewriteStyle.CLEAR -> "Clarify: produce a polished, sendable rewrite with structure."
-        RewriteStyle.SHORTER -> "Make Brief: produce a concise rewrite that keeps only the essential point and next step."
-        RewriteStyle.WARMER -> "Soften Tone: produce a warmer rewrite that preserves meaning and reduces accidental harshness."
-        RewriteStyle.DIRECT -> "Be Direct: produce a direct rewrite with the ask and next step clearly stated, without sounding harsh."
-        RewriteStyle.SOFTER -> "Soften: produce a gentle, lower-pressure rewrite."
-    }
-    val directionInstruction = """
-        Direction: ToneLayer mode. The sender is neurodivergent and wants the message to land clearly with a neurotypical reader.
-        Translate ND communication patterns into NT-readable structure without erasing meaning, boundaries, or voice.
-        Teaching must explain what was translated for NT expectations, such as main point placement, brevity, emotional regulation, sequencing, or explicit asks.
-    """.trimIndent()
-    val system = """
-        You are ToneLayer, an AI communication assistant.
-        Rewrite the user's message into a sendable version.
-        Preserve meaning. Do not shame the user. Do not add fake facts.
-        Add structure: short paragraphs or bullets only when useful.
-        $directionInstruction
-        $profileInstruction
-        $styleInstruction
-        Return ONLY valid JSON with keys:
-        {
-          "rewrite": "sendable rewritten message",
-          "teaching": "brief explanation of what changed and why it improves clarity"
-        }
-    """.trimIndent()
-
+    val system = buildToneLayerSystem(profile, level)
     val body = JSONObject().apply {
         put("model", "claude-haiku-4-5-20251001")
-        put("max_tokens", 4096)
+        put("max_tokens", 8192)
         put("system", system)
         put("messages", JSONArray().put(JSONObject().apply {
             put("role", "user")
-            put("content", "Message:\n$text\n\nReply with ONLY valid JSON.")
+            put("content", "Text:\n$text\n\nReply with ONLY valid JSON.")
         }))
     }
 
@@ -791,134 +891,51 @@ fun callClaudeForApp(
     val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
     val response = stream.bufferedReader().use { it.readText() }
     if (conn.responseCode !in 200..299) throw ClaudeHttpException(conn.responseCode, response)
+
     val content = JSONObject(response).getJSONArray("content").getJSONObject(0).getString("text")
-    val parsed = JSONObject(extractJsonObject(content))
+    val parsed  = JSONObject(extractJsonObject(content))
+
+    // Build rewrite from paragraphs array or rewrite string
+    val rewrite = parsed.optJSONArray("paragraphs")?.let { arr ->
+        (0 until arr.length()).map { arr.getString(it) }.filter { it.isNotBlank() }.joinToString("\n\n")
+    }?.ifBlank { null } ?: parsed.optString("rewrite", "").ifBlank { text }
+
+    val distortionsArr = parsed.optJSONArray("distortions")
+    val distortions = if (distortionsArr != null) {
+        (0 until distortionsArr.length()).map { distortionsArr.getString(it) }.filter { it.isNotBlank() }
+    } else emptyList()
+
     return AndroidRewriteResult(
-        rewrite = parsed.optString("rewrite", text),
-        teaching = parsed.optString("teaching", "Fine-tuned for clarity.")
+        rewrite     = rewrite,
+        grammarOnly = parsed.optString("grammar_only", "").ifBlank { text },
+        explanation = parsed.optString("explanation", ""),
+        distortions = distortions
     )
 }
 
-class ClaudeHttpException(
-    val statusCode: Int,
-    private val responseBody: String
-) : Exception("Claude API request failed with HTTP $statusCode") {
+class ClaudeHttpException(val statusCode: Int, private val responseBody: String) :
+    Exception("Claude API request failed with HTTP $statusCode") {
     fun bodyLowercase(): String = responseBody.lowercase()
 }
 
 fun friendlyClaudeFailure(error: Throwable): String {
     val message = error.localizedMessage.orEmpty().lowercase()
-    val body = (error as? ClaudeHttpException)?.bodyLowercase().orEmpty()
+    val body    = (error as? ClaudeHttpException)?.bodyLowercase().orEmpty()
     return when {
-        error is ClaudeHttpException && error.statusCode == 401 ||
-            "authentication" in message ||
-            "authentication" in body ||
-            "x-api-key" in message ||
-            "x-api-key" in body -> {
-            "The saved Claude API key is invalid. Open Privacy + API, paste a valid Anthropic Claude key, then try again. Showing a local rewrite for now."
-        }
-        error is ClaudeHttpException && error.statusCode == 429 -> {
-            "Claude is rate-limiting requests right now. Showing a local rewrite for now."
-        }
-        error is ClaudeHttpException && error.statusCode in 500..599 -> {
-            "Claude is having a server issue right now. Showing a local rewrite for now."
-        }
-        else -> {
-            "Live rewrite is unavailable right now. Showing a local rewrite for now."
-        }
+        (error is ClaudeHttpException && error.statusCode == 401) ||
+            "authentication" in message || "x-api-key" in body ->
+            "The saved Claude API key is invalid. Open Settings, paste a valid Anthropic key, then try again. Showing original text for now."
+        error is ClaudeHttpException && error.statusCode == 429 ->
+            "Claude is rate-limiting requests right now. Showing original text for now."
+        error is ClaudeHttpException && error.statusCode in 500..599 ->
+            "Claude is having a server issue right now. Showing original text for now."
+        else -> "Live rewrite is unavailable right now. Showing original text for now."
     }
 }
 
 fun extractJsonObject(raw: String): String {
     var s = raw.trim()
-    if (s.startsWith("```")) {
-        s = s.substringAfter('\n').removeSuffix("```").trim()
-    }
-    val start = s.indexOf('{')
-    val end = s.lastIndexOf('}')
+    if (s.startsWith("```")) s = s.substringAfter('\n').removeSuffix("```").trim()
+    val start = s.indexOf('{'); val end = s.lastIndexOf('}')
     return if (start >= 0 && end > start) s.substring(start, end + 1) else s
-}
-
-fun createRewriteResult(input: String, profile: NeuroProfile, style: RewriteStyle, direction: RewriteDirection): String {
-    val trimmed = input.trim()
-    if (trimmed.isEmpty()) {
-        return "Enter a message above, then tap Clarify."
-    }
-
-    val clarityFrame = when (profile) {
-        NeuroProfile.ADHD -> "clear next steps, lower cognitive load, and less ambiguity"
-        NeuroProfile.AUTISM -> "explicit context, concrete expectations, and reduced implied meaning"
-        NeuroProfile.PTSD -> "emotional safety, low threat, and clear reassurance"
-        NeuroProfile.AUTISM_PTSD -> "explicit expectations, emotional safety, reduced threat, and concrete next steps"
-        NeuroProfile.ADHD_PTSD -> "main point first, lower urgency, reduced cognitive load, and one concrete next step"
-        NeuroProfile.MIXED -> "main point first, explicit meaning, low ambiguity, low threat, clear timing, and one obvious next step"
-        NeuroProfile.AUTO -> "clearer intent, timing, tone, and requested action"
-    }
-    val brief = trimmed.split(Regex("\\s+")).take(28).joinToString(" ")
-    val directionLabel = "NT-readable version"
-
-    return when (style) {
-        RewriteStyle.CLEAR -> """
-$directionLabel:
-
-$trimmed
-
-Intent: communicate with $clarityFrame.
-""".trimIndent()
-        RewriteStyle.SHORTER -> """
-Brief version:
-
-$brief
-""".trimIndent()
-        RewriteStyle.WARMER -> """
-Warmer version:
-
-$trimmed
-
-I want this to come across with connection and clarity, not pressure.
-""".trimIndent()
-        RewriteStyle.DIRECT -> """
-Direct version:
-
-$trimmed
-
-Please let me know what works for you.
-""".trimIndent()
-        RewriteStyle.SOFTER -> """
-Softer version:
-
-$trimmed
-
-No pressure to respond immediately — I just wanted to make my intent clear.
-""".trimIndent()
-    }
-}
-
-fun fallbackTeaching(
-    input: String,
-    profile: NeuroProfile,
-    style: RewriteStyle,
-    direction: RewriteDirection,
-    setupOrFailureMessage: String? = null
-): String {
-    val specificNote = run {
-        val styleNote = when (style) {
-            RewriteStyle.CLEAR -> "The rewrite keeps the sender's meaning but organizes it for NT expectations."
-            RewriteStyle.SHORTER -> "The rewrite reduces processing friction by keeping the main point, need, and next step."
-            RewriteStyle.WARMER -> "The rewrite adds social warmth so the message is less likely to be read as blunt or tense."
-            RewriteStyle.DIRECT -> "The rewrite makes the ask easier for an NT reader to act on."
-            RewriteStyle.SOFTER -> "The rewrite lowers pressure while preserving the original need."
-        }
-        val profileNote = when (profile) {
-            NeuroProfile.ADHD -> "It also puts the useful action closer to the front."
-            NeuroProfile.AUTISM -> "It also makes implied meaning more explicit."
-            NeuroProfile.PTSD -> "It also reduces threat signals and uncertainty."
-            NeuroProfile.AUTISM_PTSD -> "It also combines explicit expectations with lower-threat wording."
-            NeuroProfile.ADHD_PTSD -> "It also reduces urgency, sequencing load, and emotional ambiguity."
-            NeuroProfile.MIXED -> "It also reduces ambiguity, threat signals, and working-memory load."
-            NeuroProfile.AUTO -> "It also clarifies intent, timing, tone, and requested action."
-        }
-        "$styleNote $profileNote"
-    }
-    return listOfNotNull(setupOrFailureMessage, specificNote).joinToString("\n\n")
 }

@@ -14,6 +14,8 @@ import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.Android.tonelayer.features.tonelayer.RewriteLevel
+import com.Android.tonelayer.features.tonelayer.buildToneLayerSystem
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.OutputStreamWriter
@@ -21,26 +23,50 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * QWERTY input method with iOS-style keys, rewrite controls, a rewrite box, and a teaching box.
+ * ToneLayer keyboard — QWERTY layout with L/M/S level buttons and ND→NT rewrite.
  */
-private const val PREFS_NAME = "tonelayer_clarity_prefs"
+private const val PREFS_NAME          = "tonelayer_clarity_prefs"
 private const val PREF_CLAUDE_API_KEY = "claude_api_key"
-private const val PREF_AI_CONSENT = "ai_processing_consent"
-private const val PREF_SHOW_TEACHING = "show_teaching_boxes"
-private val toneLayerPurple = Color.rgb(109, 74, 200)
-private val toneLayerGreen = Color.rgb(5, 150, 105)
-private val toneLayerPurpleSoft = Color.rgb(244, 240, 255)
-private val toneLayerGreenSoft = Color.rgb(236, 253, 245)
+private const val PREF_AI_CONSENT     = "ai_processing_consent"
+private const val PREF_SHOW_TEACHING  = "show_teaching_boxes"
+private const val PREF_SENDER_LENS    = "sender_lens"
+private const val PREF_REWRITE_LEVEL  = "rewrite_level"
+private const val PREF_SPIRAL_PAUSE   = "spiral_pause_enabled"
+
+private val kbPurple     = Color.rgb(109, 74,  200)
+private val kbGreen      = Color.rgb(5,   150, 105)
+private val kbPurpleSoft = Color.rgb(244, 240, 255)
+private val kbGreenSoft  = Color.rgb(236, 253, 245)
 
 class ToneLayerKeyboardService : InputMethodService() {
-    private var isShifted = false
-    private var latestOriginal = ""
-    private var latestRewrite = ""
-    private var latestTeaching = "Select text or type a message, then tap Rewrite."
+
+    private var isShifted         = false
+    private var latestOriginal    = ""
+    private var latestRewrite     = ""
+    private var latestGrammar     = ""
+    private var latestExplanation = ""
+    private var latestDistortions = listOf<String>()
+    private var showSpiral        = false
     private var keyboardTypedText = StringBuilder()
     private var latestDeleteCount = 0
     private var latestUsedSelection = false
     private lateinit var root: LinearLayout
+
+    private val currentLevel: RewriteLevel
+        get() = runCatching {
+            RewriteLevel.valueOf(
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .getString(PREF_REWRITE_LEVEL, RewriteLevel.MEDIUM.name) ?: RewriteLevel.MEDIUM.name
+            )
+        }.getOrDefault(RewriteLevel.MEDIUM)
+
+    private val currentProfile: NeuroProfile
+        get() = runCatching {
+            NeuroProfile.valueOf(
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .getString(PREF_SENDER_LENS, NeuroProfile.AUTO.name) ?: NeuroProfile.AUTO.name
+            )
+        }.getOrDefault(NeuroProfile.AUTO)
 
     override fun onCreateInputView(): View {
         root = LinearLayout(this).apply {
@@ -48,34 +74,62 @@ class ToneLayerKeyboardService : InputMethodService() {
             setPadding(dp(6), dp(6), dp(6), dp(8))
             setBackgroundColor(Color.rgb(207, 211, 217))
         }
-
         buildKeyboard()
         return root
     }
 
+    // ─── Layout ───────────────────────────────────────────────────────────────
+
     private fun buildKeyboard() {
         root.removeAllViews()
-        addToneLayerToolbar()
+        addLevelToolbar()
         addRewritePanel()
+        if (showSpiral) addSpiralPanel()
         addLetterRow("qwertyuiop", sideInsetWeight = 0f)
-        addLetterRow("asdfghjkl", sideInsetWeight = 0.45f)
+        addLetterRow("asdfghjkl",  sideInsetWeight = 0.45f)
         addBottomLetterRow()
         addUtilityRow()
     }
 
-    private fun addToneLayerToolbar() {
-        val row = horizontalRow(heightDp = 36)
-        row.addView(toolbarKey("Clarify", weight = 1.2f) { runRewrite(RewriteMode.CLEAR) })
-        row.addView(toolbarKey("Shorter") { runRewrite(RewriteMode.SHORTER) })
-        row.addView(toolbarKey("Warmer") { runRewrite(RewriteMode.WARMER) })
-        row.addView(toolbarKey("Direct") { runRewrite(RewriteMode.DIRECT) })
+    private fun addLevelToolbar() {
+        val row = horizontalRow(heightDp = 38)
+        val level = currentLevel
+        RewriteLevel.entries.forEach { l ->
+            val isSelected = l == level
+            row.addView(
+                keyView(
+                    label = l.shortLabel,
+                    weight = 1f,
+                    backgroundColor = if (isSelected) kbPurple else Color.rgb(210, 210, 220),
+                    textColor = if (isSelected) Color.WHITE else Color.rgb(60, 60, 80),
+                    textSize = 14f,
+                    radius = 10f
+                ) {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                        .edit().putString(PREF_REWRITE_LEVEL, l.name).apply()
+                    buildKeyboard()
+                }
+            )
+        }
+        // Rewrite button
+        row.addView(
+            keyView(
+                label = "Rewrite",
+                weight = 2.5f,
+                backgroundColor = kbPurple,
+                textColor = Color.WHITE,
+                textSize = 13f,
+                radius = 14f,
+                useGradient = true
+            ) { runRewrite() }
+        )
         root.addView(row)
     }
 
     private fun addRewritePanel() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = gradientBackground(toneLayerPurpleSoft, toneLayerGreenSoft, 12f)
+            background = gradientBackground(kbPurpleSoft, kbGreenSoft, 12f)
             setPadding(dp(8), dp(6), dp(8), dp(6))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -83,129 +137,121 @@ class ToneLayerKeyboardService : InputMethodService() {
             ).apply { setMargins(dp(2), dp(3), dp(2), dp(5)) }
         }
 
-        panel.addView(TextView(this).apply {
-            text = getString(R.string.rewrite_box_label)
-            setTextColor(Color.rgb(28, 28, 30))
-            setTextSize(13f)
-            typeface = Typeface.DEFAULT_BOLD
-        })
-        panel.addView(TextView(this).apply {
-            text = latestRewrite.ifBlank { "Tap Rewrite to generate a clearer version." }
-            setTextColor(Color.rgb(28, 28, 30))
-            setTextSize(14f)
+        panel.addView(labelText(getString(R.string.rewrite_box_label)))
+        panel.addView(bodyText(
+            latestRewrite.ifBlank { "Tap Rewrite to generate a clearer version." },
             maxLines = 2
-        })
+        ))
 
-        if (showTeachingBoxesEnabled()) {
-            panel.addView(TextView(this).apply {
-                text = getString(R.string.teaching_box_label)
-                setTextColor(Color.rgb(28, 28, 30))
-                setTextSize(13f)
-                typeface = Typeface.DEFAULT_BOLD
-                setPadding(0, dp(4), 0, 0)
-            })
-            panel.addView(TextView(this).apply {
-                text = latestTeaching
-                setTextColor(Color.rgb(60, 60, 67))
-                setTextSize(13f)
-                maxLines = 2
-            })
+        if (showTeachingEnabled() && latestExplanation.isNotBlank()) {
+            panel.addView(labelText("💡  Why this change", topPad = 4))
+            panel.addView(bodyText(latestExplanation, maxLines = 2, color = Color.rgb(60, 60, 67)))
         }
 
         val useRow = horizontalRow(heightDp = 34)
         useRow.addView(toolbarKey("Use Rewrite", weight = 1.4f) { useLatestRewrite() })
         useRow.addView(toolbarKey("Clear", weight = 0.8f) {
-            latestOriginal = ""
-            latestRewrite = ""
-            keyboardTypedText.clear()
-            latestDeleteCount = 0
-            latestUsedSelection = false
-            latestTeaching = "Select text or type a message, then tap Rewrite."
+            latestOriginal = ""; latestRewrite = ""; latestGrammar = ""
+            latestExplanation = ""; latestDistortions = emptyList()
+            showSpiral = false; keyboardTypedText.clear()
+            latestDeleteCount = 0; latestUsedSelection = false
             buildKeyboard()
         })
         panel.addView(useRow)
-
         root.addView(panel)
     }
 
-    private fun runRewrite(mode: RewriteMode) {
-        val selected = currentInputConnection?.getSelectedText(0)?.toString().orEmpty().trim()
-        val typedByKeyboard = keyboardTypedText.toString().trim()
+    private fun addSpiralPanel() {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = gradientBackground(Color.rgb(220, 252, 231), Color.rgb(236, 253, 245), 12f)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(dp(2), 0, dp(2), dp(5)) }
+        }
+        panel.addView(labelText("💚  Pause for a sec? Your text may land differently than you intend."))
+
+        val btnRow = horizontalRow(heightDp = 34)
+        btnRow.addView(toolbarKey("As-is", weight = 1f) {
+            showSpiral = false; buildKeyboard()
+        })
+        btnRow.addView(toolbarKey("Grammar", weight = 1f) {
+            if (latestGrammar.isNotBlank()) {
+                latestDeleteCount = latestOriginal.length
+                currentInputConnection?.deleteSurroundingText(latestDeleteCount, 0)
+                currentInputConnection?.commitText(latestGrammar, 1)
+                keyboardTypedText.clear().append(latestGrammar)
+            }
+            showSpiral = false; buildKeyboard()
+        })
+        btnRow.addView(toolbarKey("NT", weight = 1f, bg = kbGreen) {
+            if (latestRewrite.isNotBlank()) {
+                val count = if (latestUsedSelection) latestDeleteCount else latestOriginal.length
+                currentInputConnection?.deleteSurroundingText(count, 0)
+                currentInputConnection?.commitText(latestRewrite, 1)
+                keyboardTypedText.clear().append(latestRewrite)
+            }
+            showSpiral = false; buildKeyboard()
+        })
+        panel.addView(btnRow)
+        root.addView(panel)
+    }
+
+    // ─── Rewrite logic ────────────────────────────────────────────────────────
+
+    private fun runRewrite() {
+        val selected   = currentInputConnection?.getSelectedText(0)?.toString().orEmpty().trim()
+        val typedText  = keyboardTypedText.toString().trim()
         val beforeCursor = currentInputConnection?.getTextBeforeCursor(2000, 0)?.toString().orEmpty().trim()
 
         val source = when {
             selected.isNotBlank() -> selected
-            typedByKeyboard.isNotBlank() -> typedByKeyboard
+            typedText.isNotBlank() -> typedText
             else -> beforeCursor
         }.trim()
         latestUsedSelection = selected.isNotBlank()
-        latestDeleteCount = if (latestUsedSelection) selected.length else source.length
+        latestDeleteCount   = source.length
 
         if (source.isBlank()) {
-            latestOriginal = ""
-            latestRewrite = ""
-            latestTeaching = "No text found. Type a message first, paste text into the field, or select text, then tap Rewrite."
-            buildKeyboard()
-            return
+            latestRewrite = "No text found. Type or select some text first."
+            buildKeyboard(); return
         }
 
-        latestOriginal = source
-        latestRewrite = "Fine-tuning for clarity…"
-        latestTeaching = longMessageCheck(source)
+        latestOriginal    = source
+        latestRewrite     = "Rewriting…"
+        latestGrammar     = ""
+        latestExplanation = ""
+        latestDistortions = emptyList()
+        showSpiral        = false
         buildKeyboard()
 
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val apiKey = prefs.getString(PREF_CLAUDE_API_KEY, "").orEmpty().trim()
+        val prefs   = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val apiKey  = prefs.getString(PREF_CLAUDE_API_KEY, "").orEmpty().trim()
         val consent = prefs.getBoolean(PREF_AI_CONSENT, false)
-        if (!consent) {
-            latestRewrite = createRewriteResult(source, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
-            latestTeaching = appendLongMessageCheck(
-                fallbackTeaching(
-                    source,
-                    NeuroProfile.AUTO,
-                    mode.toRewriteStyle(),
-                    RewriteDirection.ND_TO_NT,
-                    "Turn on AI processing consent in the ToneLayer app to use live rewrites."
-                ),
-                source
-            )
-            buildKeyboard()
-            return
-        }
-        if (apiKey.isBlank()) {
-            latestRewrite = createRewriteResult(source, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
-            latestTeaching = appendLongMessageCheck(
-                fallbackTeaching(
-                    source,
-                    NeuroProfile.AUTO,
-                    mode.toRewriteStyle(),
-                    RewriteDirection.ND_TO_NT,
-                    "Add your Claude API key in the ToneLayer app to use live rewrites."
-                ),
-                source
-            )
-            buildKeyboard()
-            return
+        val profile = currentProfile
+        val level   = currentLevel
+
+        if (!consent || apiKey.isBlank()) {
+            latestRewrite     = source
+            latestExplanation = if (!consent) "Enable AI processing in the ToneLayer app." else "Add your Claude API key in the ToneLayer app."
+            buildKeyboard(); return
         }
 
         Thread {
-            val result = runCatching { callClaude(apiKey, source, mode) }
+            val result = runCatching { callClaudeKeyboard(apiKey, source, profile, level) }
             Handler(Looper.getMainLooper()).post {
-                result.onSuccess {
-                    latestRewrite = it.first
-                    latestTeaching = appendLongMessageCheck(it.second, source)
+                result.onSuccess { r ->
+                    latestRewrite     = r.rewrite
+                    latestGrammar     = r.grammarOnly
+                    latestExplanation = r.explanation
+                    latestDistortions = r.distortions
+                    val spiralEnabled = prefs.getBoolean(PREF_SPIRAL_PAUSE, true)
+                    showSpiral = spiralEnabled && r.distortions.isNotEmpty()
                 }.onFailure {
-                    latestRewrite = createRewriteResult(source, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
-                    latestTeaching = appendLongMessageCheck(
-                        fallbackTeaching(
-                            source,
-                            NeuroProfile.AUTO,
-                            mode.toRewriteStyle(),
-                            RewriteDirection.ND_TO_NT,
-                            friendlyClaudeFailure(it)
-                        ),
-                        source
-                    )
+                    latestRewrite     = source
+                    latestExplanation = friendlyClaudeFailure(it)
                 }
                 buildKeyboard()
             }
@@ -213,14 +259,11 @@ class ToneLayerKeyboardService : InputMethodService() {
     }
 
     private fun useLatestRewrite() {
-        if (latestRewrite.isBlank()) {
-            latestTeaching = "Tap Rewrite first, then Use Rewrite."
-            buildKeyboard()
-            return
+        if (latestRewrite.isBlank() || latestRewrite == "Rewriting…") {
+            latestExplanation = "Wait for the rewrite to finish, then tap Use Rewrite."
+            buildKeyboard(); return
         }
-
-        val selected = currentInputConnection?.getSelectedText(0)?.toString().orEmpty()
-        if (selected.isNotBlank() || latestUsedSelection) {
+        if (latestUsedSelection) {
             currentInputConnection?.commitText(latestRewrite, 1)
         } else if (latestDeleteCount > 0) {
             currentInputConnection?.deleteSurroundingText(latestDeleteCount, 0)
@@ -228,78 +271,71 @@ class ToneLayerKeyboardService : InputMethodService() {
         } else {
             currentInputConnection?.commitText(latestRewrite, 1)
         }
-        keyboardTypedText.clear()
-        keyboardTypedText.append(latestRewrite)
-        latestOriginal = latestRewrite
+        keyboardTypedText.clear().append(latestRewrite)
+        latestOriginal    = latestRewrite
         latestDeleteCount = latestRewrite.length
         latestUsedSelection = false
     }
 
-    private fun createRewrite(text: String, mode: RewriteMode): String {
-        return createRewriteResult(text, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
-    }
+    // ─── Claude call ──────────────────────────────────────────────────────────
 
-    private fun createTeaching(text: String, mode: RewriteMode): String {
-        return fallbackTeaching(text, NeuroProfile.AUTO, mode.toRewriteStyle(), RewriteDirection.ND_TO_NT)
-    }
+    private data class KeyboardResult(
+        val rewrite: String,
+        val grammarOnly: String,
+        val explanation: String,
+        val distortions: List<String>
+    )
 
-    private fun longMessageCheck(text: String): String {
-        val words = text.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size
-        return if (text.length >= 700 || words >= 120) {
-            "This is getting long for a text. Are you okay? If this is turning into a novel, try Make Brief before sending."
-        } else ""
-    }
-
-    private fun callClaude(apiKey: String, text: String, mode: RewriteMode): Pair<String, String> {
-        val style = when (mode) {
-            RewriteMode.CLEAR -> "Clarify the message while preserving meaning."
-            RewriteMode.SHORTER -> "Make the message brief and easier to act on."
-            RewriteMode.WARMER -> "Soften the tone while preserving meaning."
-            RewriteMode.DIRECT -> "Make the message direct and clear without sounding harsh."
-        }
-        val system = """
-            You are ToneLayer, a communication assistant. The sender is neurodivergent and wants the message to land clearly with a neurotypical reader. Rewrite the user's message so it is clearer, easier to receive, and matched to the requested style. Do not shame the user. Preserve meaning. Return ONLY valid JSON with keys rewrite and teaching. Teaching should explain briefly what was translated for NT readability.
-            Style: $style
-        """.trimIndent()
-
+    private fun callClaudeKeyboard(
+        apiKey: String,
+        text: String,
+        profile: NeuroProfile,
+        level: RewriteLevel
+    ): KeyboardResult {
+        val system = buildToneLayerSystem(profile, level)
         val body = JSONObject().apply {
             put("model", "claude-haiku-4-5-20251001")
-            put("max_tokens", 2048)
+            put("max_tokens", 4096)
             put("system", system)
             put("messages", JSONArray().put(JSONObject().apply {
                 put("role", "user")
-                put("content", "Message:\n$text\n\nReply with ONLY valid JSON.")
+                put("content", "Text:\n$text\n\nReply with ONLY valid JSON.")
             }))
         }
 
         val conn = (URL("https://api.anthropic.com/v1/messages").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
-            connectTimeout = 30000
-            readTimeout = 90000
-            doOutput = true
+            connectTimeout = 30000; readTimeout = 90000; doOutput = true
             setRequestProperty("x-api-key", apiKey)
             setRequestProperty("anthropic-version", "2023-06-01")
             setRequestProperty("Content-Type", "application/json")
         }
         OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
-        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+        val stream   = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
         val response = stream.bufferedReader().use { it.readText() }
         if (conn.responseCode !in 200..299) throw ClaudeHttpException(conn.responseCode, response)
+
         val content = JSONObject(response).getJSONArray("content").getJSONObject(0).getString("text")
-        val cleaned = extractJson(content)
-        val parsed = JSONObject(cleaned)
-        return Pair(parsed.optString("rewrite", text), parsed.optString("teaching", "Fine-tuned for clarity."))
+        val parsed  = JSONObject(extractJsonObject(content))
+
+        val rewrite = parsed.optJSONArray("paragraphs")?.let { arr ->
+            (0 until arr.length()).map { arr.getString(it) }.filter { it.isNotBlank() }.joinToString("\n\n")
+        }?.ifBlank { null } ?: parsed.optString("rewrite", "").ifBlank { text }
+
+        val distArr = parsed.optJSONArray("distortions")
+        val distortions = if (distArr != null) {
+            (0 until distArr.length()).map { distArr.getString(it) }.filter { it.isNotBlank() }
+        } else emptyList()
+
+        return KeyboardResult(
+            rewrite     = rewrite,
+            grammarOnly = parsed.optString("grammar_only", "").ifBlank { text },
+            explanation = parsed.optString("explanation", ""),
+            distortions = distortions
+        )
     }
 
-    private fun extractJson(raw: String): String {
-        var s = raw.trim()
-        if (s.startsWith("```")) {
-            s = s.substringAfter('\n').removeSuffix("```").trim()
-        }
-        val start = s.indexOf('{')
-        val end = s.lastIndexOf('}')
-        return if (start >= 0 && end > start) s.substring(start, end + 1) else s
-    }
+    // ─── Key rows ─────────────────────────────────────────────────────────────
 
     private fun addLetterRow(letters: String, sideInsetWeight: Float) {
         val row = horizontalRow(heightDp = 44)
@@ -307,10 +343,7 @@ class ToneLayerKeyboardService : InputMethodService() {
         letters.forEach { letter ->
             row.addView(letterKey(displayLetter(letter.toString())) {
                 commitText(displayLetter(letter.toString()))
-                if (isShifted) {
-                    isShifted = false
-                    buildKeyboard()
-                }
+                if (isShifted) { isShifted = false; buildKeyboard() }
             })
         }
         if (sideInsetWeight > 0f) row.addView(spacer(sideInsetWeight))
@@ -319,73 +352,71 @@ class ToneLayerKeyboardService : InputMethodService() {
 
     private fun addBottomLetterRow() {
         val row = horizontalRow(heightDp = 44)
-        row.addView(utilityKey("⇧", weight = 1.35f) {
-            isShifted = !isShifted
-            buildKeyboard()
-        })
+        row.addView(utilityKey("⇧", 1.35f) { isShifted = !isShifted; buildKeyboard() })
         row.addView(spacer(0.15f))
-        "zxcvbnm".forEach { letter ->
-            row.addView(letterKey(displayLetter(letter.toString())) {
-                commitText(displayLetter(letter.toString()))
-                if (isShifted) {
-                    isShifted = false
-                    buildKeyboard()
-                }
+        "zxcvbnm".forEach { l ->
+            row.addView(letterKey(displayLetter(l.toString())) {
+                commitText(displayLetter(l.toString()))
+                if (isShifted) { isShifted = false; buildKeyboard() }
             })
         }
         row.addView(spacer(0.15f))
-        row.addView(utilityKey("⌫", weight = 1.35f) {
+        row.addView(utilityKey("⌫", 1.35f) {
             currentInputConnection?.deleteSurroundingText(1, 0)
-            if (keyboardTypedText.isNotEmpty()) {
-                keyboardTypedText.deleteCharAt(keyboardTypedText.length - 1)
-            }
+            if (keyboardTypedText.isNotEmpty()) keyboardTypedText.deleteCharAt(keyboardTypedText.length - 1)
         })
         root.addView(row)
     }
 
     private fun addUtilityRow() {
         val row = horizontalRow(heightDp = 44)
-        row.addView(utilityKey("123", weight = 1.25f) { commitText("123") })
-        row.addView(utilityKey(",", weight = 0.8f) { commitText(",") })
+        row.addView(utilityKey("123", 1.25f) { commitText("123") })
+        row.addView(utilityKey(",",   0.80f) { commitText(",") })
         row.addView(letterKey("space", weight = 4.4f) { commitText(" ") })
-        row.addView(utilityKey(".", weight = 0.8f) { commitText(".") })
-        row.addView(utilityKey("return", weight = 1.45f) { commitText("\n") })
+        row.addView(utilityKey(".",    0.80f) { commitText(".") })
+        row.addView(utilityKey("return", 1.45f) { commitText("\n") })
         root.addView(row)
     }
 
-    private fun displayLetter(letter: String): String {
-        return if (isShifted) letter.uppercase() else letter.lowercase()
+    // ─── View helpers ─────────────────────────────────────────────────────────
+
+    private fun displayLetter(letter: String) = if (isShifted) letter.uppercase() else letter.lowercase()
+
+    private fun horizontalRow(heightDp: Int) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity     = Gravity.CENTER
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(heightDp)
+        )
     }
 
-    private fun horizontalRow(heightDp: Int): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(heightDp)
-            )
-        }
+    private fun spacer(weight: Float) = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight)
     }
 
-    private fun spacer(weight: Float): View {
-        return View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight)
-        }
+    private fun letterKey(label: String, weight: Float = 1f, onClick: () -> Unit) =
+        keyView(label, weight, Color.WHITE, Color.rgb(28, 28, 30),
+            if (label == "space") 15f else 20f, 9f, onClick = onClick)
+
+    private fun utilityKey(label: String, weight: Float = 1f, onClick: () -> Unit) =
+        keyView(label, weight, Color.rgb(172, 179, 188), Color.rgb(28, 28, 30), 14f, 9f, onClick = onClick)
+
+    private fun toolbarKey(label: String, weight: Float = 1f, bg: Int = kbPurple, onClick: () -> Unit) =
+        keyView(label, weight, bg, Color.WHITE, 13f, 16f, useGradient = false, onClick = onClick)
+
+    private fun labelText(text: String, topPad: Int = 0) = TextView(this).apply {
+        this.text = text
+        setTextColor(Color.rgb(28, 28, 30))
+        setTextSize(13f)
+        typeface = Typeface.DEFAULT_BOLD
+        if (topPad > 0) setPadding(0, dp(topPad), 0, 0)
     }
 
-    private fun letterKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
-        return keyView(label, weight, Color.WHITE, Color.rgb(28, 28, 30), if (label == "space") 15f else 20f, 9f, onClick)
-    }
-
-    private fun utilityKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
-        return keyView(label, weight, Color.rgb(172, 179, 188), Color.rgb(28, 28, 30), 14f, 9f, onClick)
-    }
-
-    private fun toolbarKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
-        return keyView(label, weight, toneLayerPurple, Color.WHITE, 13f, 16f, onClick).apply {
-            background = gradientBackground(toneLayerPurple, toneLayerGreen, 16f)
-        }
+    private fun bodyText(text: String, maxLines: Int, color: Int = Color.rgb(28, 28, 30)) = TextView(this).apply {
+        this.text = text
+        setTextColor(color)
+        setTextSize(14f)
+        this.maxLines = maxLines
     }
 
     private fun keyView(
@@ -395,73 +426,44 @@ class ToneLayerKeyboardService : InputMethodService() {
         textColor: Int,
         textSize: Float,
         radius: Float,
+        useGradient: Boolean = false,
         onClick: () -> Unit
-    ): TextView {
-        return TextView(this).apply {
-            text = label
-            gravity = Gravity.CENTER
-            setTextColor(textColor)
-            setTextSize(textSize)
-            typeface = Typeface.DEFAULT
-            background = roundedBackground(backgroundColor, radius)
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { onClick() }
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
-                setMargins(dp(2), dp(3), dp(2), dp(3))
-            }
+    ) = TextView(this).apply {
+        text = label
+        gravity = Gravity.CENTER
+        setTextColor(textColor)
+        setTextSize(textSize)
+        typeface = Typeface.DEFAULT
+        background = if (useGradient)
+            gradientBackground(backgroundColor, kbGreen, radius)
+        else
+            roundedBackground(backgroundColor, radius)
+        isClickable = true; isFocusable = true
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
+            setMargins(dp(2), dp(3), dp(2), dp(3))
         }
     }
 
-    private fun roundedBackground(color: Int, radiusDp: Float): GradientDrawable {
-        return GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            setColor(color)
-            cornerRadius = radiusDp * resources.displayMetrics.density
-        }
+    private fun roundedBackground(color: Int, radiusDp: Float) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(color)
+        cornerRadius = radiusDp * resources.displayMetrics.density
     }
 
-    private fun gradientBackground(startColor: Int, endColor: Int, radiusDp: Float): GradientDrawable {
-        return GradientDrawable(
-            GradientDrawable.Orientation.LEFT_RIGHT,
-            intArrayOf(startColor, endColor)
-        ).apply {
+    private fun gradientBackground(start: Int, end: Int, radiusDp: Float) =
+        GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(start, end)).apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = radiusDp * resources.displayMetrics.density
         }
-    }
 
-    private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
-    }
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun commitText(text: String) {
         currentInputConnection?.commitText(text, 1)
         keyboardTypedText.append(text)
     }
 
-    private fun appendLongMessageCheck(teaching: String, source: String): String {
-        val lengthNote = longMessageCheck(source)
-        return if (lengthNote.isBlank()) teaching else "$teaching $lengthNote"
-    }
-
-    private fun showTeachingBoxesEnabled(): Boolean {
-        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_SHOW_TEACHING, true)
-    }
-
-    private enum class RewriteMode {
-        CLEAR,
-        SHORTER,
-        WARMER,
-        DIRECT
-    }
-
-    private fun RewriteMode.toRewriteStyle(): RewriteStyle {
-        return when (this) {
-            RewriteMode.CLEAR -> RewriteStyle.CLEAR
-            RewriteMode.SHORTER -> RewriteStyle.SHORTER
-            RewriteMode.WARMER -> RewriteStyle.WARMER
-            RewriteMode.DIRECT -> RewriteStyle.DIRECT
-        }
-    }
+    private fun showTeachingEnabled() =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_SHOW_TEACHING, true)
 }
