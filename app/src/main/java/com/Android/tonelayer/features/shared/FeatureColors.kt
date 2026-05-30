@@ -15,11 +15,11 @@ data class FeatureColors(
 )
 
 val ToneLayerBlue = FeatureColors(
-    primary = Color(0xFF6D4AC8),
-    secondary = Color(0xFF059669),
-    surface = Color(0xFFF4F0FF),
-    soft = Color(0xFFECFDF5),
-    outline = Color(0xFFA7F3D0)
+    primary   = Color(0xFF1D4ED8),   // royal blue
+    secondary = Color(0xFF059669),   // emerald green
+    surface   = Color(0xFFEFF6FF),   // light blue surface
+    soft      = Color(0xFFECFDF5),   // light green soft
+    outline   = Color(0xFF93C5FD)    // sky blue outline
 )
 
 val NeutralGray = FeatureColors(

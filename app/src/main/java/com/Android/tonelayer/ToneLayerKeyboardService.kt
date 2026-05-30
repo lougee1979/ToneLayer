@@ -33,10 +33,10 @@ private const val PREF_SENDER_LENS    = "sender_lens"
 private const val PREF_REWRITE_LEVEL  = "rewrite_level"
 private const val PREF_SPIRAL_PAUSE   = "spiral_pause_enabled"
 
-private val kbPurple     = Color.rgb(109, 74,  200)
-private val kbGreen      = Color.rgb(5,   150, 105)
-private val kbPurpleSoft = Color.rgb(244, 240, 255)
-private val kbGreenSoft  = Color.rgb(236, 253, 245)
+private val kbPurple     = Color.rgb(29,  78,  216)  // royal blue
+private val kbGreen      = Color.rgb(5,   150, 105)  // emerald green
+private val kbPurpleSoft = Color.rgb(239, 246, 255)  // light blue
+private val kbGreenSoft  = Color.rgb(236, 253, 245)  // light green
 
 class ToneLayerKeyboardService : InputMethodService() {
 
